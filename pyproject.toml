@@ -16,6 +16,11 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
+    # Today, update_issue.py imports evaluate.py which needs requests and pyyaml.
+    # The latter is a single-file script with own dependency declaration,
+    # so, perhaps, this is temporary.
+    "requests",
+    "pyyaml",
 ]
 
 [dependency-groups]

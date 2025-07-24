@@ -50,10 +50,12 @@ def evaluate(
     contribution_url: str,
     license_url: str,
     security_url: str,
+    subdir: str | None,
 ) -> list[str]:
     """Evaluate the charm for listing on Charmhub."""
     results = []
     repo_dir = _clone_repo(repository_url)
+    repo_dir = repo_dir / subdir if subdir else  repo_dir
     try:
         results.append(coding_conventions(linting_url))
         results.append(contribution_guidelines(contribution_url))
@@ -177,6 +179,7 @@ def _clone_repo(charm_repo_url: str) -> pathlib.Path:
 
 def _get_charmcraft_yaml(repo_dir: pathlib.Path) -> dict:
     charmcraft_path = repo_dir / 'charmcraft.yaml'
+    assert charmcraft_path.is_file()
     if not charmcraft_path.is_file():
         return None
     try:

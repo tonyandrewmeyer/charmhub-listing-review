@@ -21,6 +21,7 @@ creation process, with the help of the issue template. This script updates the
 created issue to be user-friendly, and to include the current checklist.
 """
 
+import os
 import pathlib
 import re
 import subprocess  # noqa: S404
@@ -178,7 +179,7 @@ def find_best_practices(path_to_ops: pathlib.Path, path_to_charmcraft: pathlib.P
     return checklist
 
 
-def get_details_from_issue(issue_number: int):
+def get_details_from_issue(issue_number: int) -> dict[str, str]:
     """Fetch details from the issue number using the GitHub CLI.
 
     Requires `gh` CLI to be installed and authenticated, and `jq` to be
@@ -208,12 +209,13 @@ def get_details_from_issue(issue_number: int):
     }
 
     # Extract values for each field
-    issue_data = {}
+    issue_data: dict[str, str] = {}
     for key, heading in fields.items():
         pattern = rf'{re.escape(heading)}\s*\n([^\n]*)'
         match = re.search(pattern, body)
         if match:
             value = match.group(1).strip()
+            # this breaks the pretty types, fix it later.
             if key == 'has_library':
                 issue_data[key] = value.lower() in ('yes', 'true', '1')
             else:
@@ -274,6 +276,7 @@ if __name__ == '__main__':
             issue_data['contribution_link'],
             issue_data['license_link'],
             issue_data['security_link'],
+            os.environ.get("SUBDIR"),
         )
         for result in results:
             if result.replace('* [ ]', '* [x]') in description:
