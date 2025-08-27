@@ -16,6 +16,8 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
+    "PyYAML==6.*",
+    "requests~=2.32",
 ]
 
 [dependency-groups]
@@ -29,6 +31,9 @@ unit = [
     "pytest~=8.4",
     "coverage[toml]~=7.0",
 ]
+
+[project.scripts]
+update-issue = "charmhub_listing_review.update_issue:main"
 
 # Testing tools configuration
 [tool.coverage.run]
@@ -114,6 +119,14 @@ ignore = [
 
     # Manual dict comprehension.
     "PERF403",
+
+    # Subprocess calls - not using an absolute path, and having some user content.
+    # There's a lot of calls to `gh` in the core processing here, and the code
+    # typically runs in CI, which mitigates most of the risk. We're rather just
+    # be careful and consider the risks of each call without having to scatter
+    # noqa's around.
+    "S603",
+    "S607",
 ]
 
 [tool.ruff.lint.pydocstyle]

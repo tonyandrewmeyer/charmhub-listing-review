@@ -46,7 +46,7 @@ def evaluate(
     security_url: str,
 ) -> list[str]:
     """Evaluate the charm for listing on Charmhub.
-    
+
     Returns a list of strings that should be included in a Markdown checklist.
     For example:
 
@@ -164,7 +164,7 @@ def _clone_repo(charm_repo_url: str) -> pathlib.Path:
     """Clone the charm repository to a temporary directory."""
     temp_dir = tempfile.mkdtemp()
     try:
-        subprocess.run(  # noqa: S603  We should validate the safety of the URL, but also: in CI.
+        subprocess.run(
             ['/usr/bin/git', 'clone', '--depth', '1', charm_repo_url, temp_dir],
             check=True,
             stdout=subprocess.DEVNULL,
@@ -433,7 +433,7 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> str:
 
     for command in commands_to_run:
         try:
-            subprocess.check_output(command)  # noqa: S603
+            subprocess.check_output(command)
         except subprocess.CalledProcessError:
             return description
 
