@@ -272,7 +272,10 @@ def assign_review(issue_number: int, dry_run: bool = False):
     are expected to simply ping them in a comment. Once they have submitted
     their review, the author can interact with them in the usual way.
     """
-    reviewers_file = pathlib.Path(__file__).parent.parent.parent / 'reviewers.yaml'
+     # TODO: Figure out where this should be and how the script should locate it.
+    reviewers_file = pathlib.Path(
+        '/home/runner/work/charmhub-listing-review/charmhub-listing-review/reviewers.yaml'
+    )
     with reviewers_file.open('r') as f:
         reviewers_data = yaml.safe_load(f)
     reviewers = reviewers_data['reviewers']
