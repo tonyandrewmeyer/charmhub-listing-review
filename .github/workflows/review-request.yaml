@@ -50,4 +50,8 @@ jobs:
         env:
             GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-            uv run src/charmhub_listing_review/update_issue.py --issue-number "${{ github.event.issue.number }}" --path-to-ops=operator --path-to-charmcraft=charmcraft
+            # TODO: This is not the best way to run the script, we should clean this up, but just
+            # getting it working for now.
+            uv venv
+            uv pip install .
+            uv run update-issue --issue-number "${{ github.event.issue.number }}" --path-to-ops=operator --path-to-charmcraft=charmcraft
