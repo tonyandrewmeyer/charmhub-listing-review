@@ -1,0 +1,62 @@
+name: Charmhub Listing Request
+description: Request a review for a charm to be publicly listed on Charmhub.
+labels:
+  - listing-request
+body:
+  - type: input
+    id: Name
+    attributes:
+      label: Charm name
+      description: "What is the name of the charm, as it appears on Charmhub?"
+      placeholder: myworkload-k8s
+    validations:
+      required: true
+
+  - type: textarea
+    id: Demo
+    attributes:
+      label: Demo
+      description: "Please provide a link to a demo video, or instructions on how to set up a demo over a call, or instructions on installing and trying out the charm via a tutorial."
+      placeholder: https://www.youtube.com/watch?v=example
+    validations:
+      required: true
+
+  - type: input
+    id: Repository-Link
+    attributes:
+      label: "Project Repository"
+      description: "Please provide the link to the charm's source code repository."
+    validations:
+      required: true
+
+  - type: input
+    id: CI-Linting
+    attributes:
+      label: "CI Linting"
+      description: "Please provide the link to the charm's CI workflow for linting and style checks."
+    validations:
+      required: true
+
+  - type: input
+    id: CI-Release
+    attributes:
+      label: "CI Release"
+      description: "Please provide the link to the charm's CI workflow for publishing to Charmhub."
+    validations:
+      required: true
+
+  - type: input
+    id: CI-Integration
+    attributes:
+      label: "CI Integration Tests"
+      description: "Please provide the link to the charm's CI workflow for integration tests."
+    validations:
+      required: true
+
+  - type: input
+    id: Documentation-Link
+    attributes:
+      label: "Documentation Link"
+      description: "Please provide the link to the charm's documentation."
+    validations:
+      required: true

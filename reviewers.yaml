@@ -1,0 +1,25 @@
+reviewers:
+    # The key must be a GitHub username.
+    # The 'name' is currently unused, but is here for convenience.
+    "@benhoyt":
+        name: "Ben Hoyt"
+        team: "Charm Tech"
+    "@tonyandrewmeyer":
+        name: "Tony Meyer"
+        team: "Charm Tech"
+    "@IronCore864":
+        name: "Tiexin Guo"
+        team: "Charm Tech"
+    "@dimaqq":
+        name: "Dima Tisnek"
+        team: "Charm Tech"
+    "@dwilding":
+        name: "David Wilding"
+        team: "Charm Tech"
+    # As a Prof I, James isn't expected to do reviews, but for the evaluation
+    # cycle, he's helping out.
+    "@james-garner-canonical":
+        name: "James Garner"
+        team: "Charm Tech"
+    # Once the evaluation cycle is over, we'd add one person from each charming
+    # team here as well, and give them triage permissions in the repository.
