@@ -31,7 +31,7 @@ This repository contains:
 ## Steps of a review
 
 1. The author requests a review for *one* charm at a time with all prerequisites
-   using a [listing request issue](https://github.com/canonical/charmhub-listing-review/issues/new)
+   using a [listing request issue](https://github.com/canonical/charmhub-listing-review/issues/new?template=listing-request.yml)
    in this repository.
 2. The reviewer checks if the prerequisites are met and the issue is
    ready.
