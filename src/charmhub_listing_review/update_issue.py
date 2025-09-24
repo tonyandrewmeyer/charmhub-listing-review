@@ -67,13 +67,14 @@ def issue_comment(
 ):
     """Provide a suitable issue comment.
 
-    The comment outlines what is required by the reviewer and what the current
-    progress against the review is.
+    The comment outlines what is required by the reviewer. It will pre-tick any
+    of the items that can be automatically checked, as they are at the time of
+    the initial comment.
     """
     # fmt: off
     description = [
         f"""
-Please review the charm by checking each of the items in the following checklist.
+Reviewer: Please review the charm, **within three working days** by checking each of the items in the following checklist. If blocking issues are found, please help the author work through those, and respond to any follow-up posts within *one working day*.
 
 If you find other improvements or fixes that could be made to the charm, feel free to suggest those, but **they do not block listing**. If you find something that's missing from the review checklist or best practices, please separately suggest that (see [CONTRIBUTING.md](../CONTRIBUTING.md)) so that we can keep the review process consistent.
 
@@ -86,8 +87,10 @@ When reviewing test coverage of the charm, note that:
 * There is no minimum for test coverage. We suggest that tests cover at least all configuration options and actions, as well as the observed Juju events, but this is not a requirement for listing.
 * Some charms may have additional tests in an external location, particularly if the charm has specific resource requirements (such as specific hardware).
 
-Please provide your review within *three working days*. If blocking issues are found, please help the author work through those, and respond to any follow-up posts within *one working day*.
+<details>
+<summary>Reviewer: copy this list of requirements to a separate comment, so you can check things off</summary>
 
+```
 ## Listing requirements
 
 * [ ] The charm does what it is meant to do, per the [demo or tutorial]({demo_url}).
@@ -126,40 +129,9 @@ required for listing.
 """.strip()
         )
 
-    description.append('\n\n')
-    description.append(
-        """
-## Additional checks
-
-The following checks are not required for listing, but are recommended for all charms.
-
-* [ ] A user can deploy the charm with a sensible default configuration.
-* [ ] The charm exposes provides / requires interfaces for integration ready to be adopted by the ecosystem.
-* [ ] The charm upgrades the application safely, preserving data and settings, and minimising downtime.
-* [ ] The charm supports scaling up and down, if the application permits or supports it.
-* [ ] The charm supports backup and restore, if the application permits or supports it.
-* [ ] The charm is integrated with observability, including metrics, alerting, and logging.
-* [ ] The model-config `juju-http-proxy`, `juju-https-proxy`, and `juju-no-proxy` options should influence the charm's behavior when the charm or charm workload makes any HTTP request.
-""".strip()  # noqa: E501
-    )
+    description.append('\n```\n</details>\n')
 
     return ''.join(description)
-
-
-# TODO: It would be better to amend the docs so that we don't have these issues
-# than to have a manually curated set of practices to ignore.
-IGNORED_BEST_PRACTICES = {
-    # This is covered by the more extensive items above. It's also duplicated in
-    # the docs.
-    '* [ ] The quality assurance pipeline of a charm should be automated using a '
-    'continuous integration (CI) system.',
-    # This is duplicated by another best practice note.
-    "* [ ] If you're setting up a ``git`` repository: name it using the pattern "
-    '``<charm name>-operator``. For the charm name, see :ref:`specify-a-name`.',
-    # These don't seem like best practice notes -- we should adjust the docs.
-    '* [ ] Smaller charm documentation examples:',
-    '* [ ] Bigger charm documentation examples:',
-}
 
 
 def extract_best_practice_blocks(file_path: pathlib.Path):
@@ -191,7 +163,6 @@ def find_best_practices(path_to_ops: pathlib.Path, path_to_charmcraft: pathlib.P
                 practices = (
                     practice
                     for practice in extract_best_practice_blocks(file_path)
-                    if practice not in IGNORED_BEST_PRACTICES
                 )
                 checklist.extend(practices)
     checklist.sort()
@@ -226,7 +197,7 @@ def get_details_from_issue(issue_number: int):
     )
     body = json.loads(result.stdout)['body']
 
-    # Define the fields to extract and their headings
+    # Define the fields to extract and their headings.
     fields = {
         'name': '### Charm name',
         'demo_url': '### Demo',
@@ -237,7 +208,7 @@ def get_details_from_issue(issue_number: int):
         'documentation_link': '### Documentation Link',
     }
 
-    # Extract values for each field
+    # Extract values for each field.
     issue_data: dict[str, bool | str | None] = {}
     for key, heading in fields.items():
         pattern = rf'{re.escape(heading)}\s*\n([^\n]*)'
@@ -324,7 +295,7 @@ charm"). Please choose someone that will have time to complete the initial
 review within the next three working days.
 """,
     )
-    comment = f'{comment}\n\n{request_review}'
+    comment = f'{request_review}\n\n{comment}'
 
     existing_comments = subprocess.run(
         ['gh', 'issue', 'view', str(issue_number), '--json', 'comments'],
@@ -343,33 +314,6 @@ review within the next three working days.
                 check=True,
             )
         return
-
-    # Update the status with any checks from the reviewer.
-    reviewer = None
-    for existing_comment in existing_comments:
-        if existing_comment['author']['login'] == manager:
-            try:
-                reviewer = existing_comment['body'].split('@', 1)[1].split(' ')[0]
-            except IndexError:
-                print(
-                    f"Could not find reviewer in comment {existing_comment['body']}",
-                    file=sys.stderr
-                )
-            else:
-                continue
-        if reviewer is None or existing_comment['author']['login'] != reviewer:
-            continue
-        for line in existing_comment['body'].splitlines():
-            # We ignore everything that isn't in the checklist format,
-            # so that the reviewer can leave free-form comments.
-            if not line.startswith('* [ ]') and not line.startswith('* [x]'):
-                continue
-            if line.startswith('* [ ]') and line.replace('* [ ]', '* [x]') in comment:
-                # We are unticking this item, unfortunately.
-                comment = comment.replace(line.replace('* [ ]', '* [x]'), line)
-            elif line.startswith('* [x]') and line.replace('* [x]', '* [ ]') in comment:
-                # We are ticking this item, yay!
-                comment = comment.replace(line.replace('* [x]', '* [ ]'), line)
 
     # Update the first comment with the new content.
     if dry_run:
@@ -390,7 +334,7 @@ review within the next three working days.
 
 
 def apply_automated_checks(issue_data: _IssueData, comment: str):
-    """Adjust the comment to tick or untick items based on automated checks."""
+    """Adjust the comment to tick items based on automated checks."""
     results = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
@@ -400,13 +344,7 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['security_link'],
     )
     for result in results:
-        if result.replace('* [ ]', '* [x]') in comment:
-            # TODO: Should we support unticking? The reviewer needs to be able to override
-            # the checklist. However, the publisher should not be able to override and one way
-            # to enforce that is to have the automatic check 'win' (we would also need to
-            # trigger if the comment changes and not loop).
-            comment = comment.replace(result, result.replace('* [ ]', '* [x]'))
-        elif result.replace('* [x]', '* [ ]') in comment:
+        if result.replace('* [x]', '* [ ]') in comment:
             comment = comment.replace(result.replace('* [x]', '* [ ]'), result)
     return comment
 
