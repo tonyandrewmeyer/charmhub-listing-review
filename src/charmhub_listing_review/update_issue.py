@@ -318,7 +318,7 @@ def update_gh_issue(issue_number: int, summary: str, comment: str, dry_run: bool
         r'\s',
         ' ',
         f"""\
-@{manager} - please assign this review to someone in your team, and mention
+{manager} - please assign this review to someone in your team, and mention
 their name in a comment (for example, "Hi @canonical-person, please review this
 charm"). Please choose someone that will have time to complete the initial
 review within the next three working days.
