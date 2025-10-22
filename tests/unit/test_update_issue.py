@@ -39,14 +39,17 @@ def test_assign_review_multiple_teams(
     mock_random_choice.return_value = '@bob'
     reviewer = update_issue.assign_review(42)
     assert reviewer == '@bob'
-    mock_subprocess_run.assert_called_once_with([
-        'gh',
-        'issue',
-        'edit',
-        '42',
-        '--add-assignee',
-        'bob',
-    ], check=True)
+    mock_subprocess_run.assert_called_once_with(
+        [
+            'gh',
+            'issue',
+            'edit',
+            '42',
+            '--add-assignee',
+            'bob',
+        ],
+        check=True,
+    )
 
 
 @mock.patch('subprocess.run')
@@ -63,14 +66,17 @@ def test_assign_review_single_team(mock_open, mock_yaml_load, mock_subprocess_ru
     mock_subprocess_run.return_value = mock.Mock()
     reviewer = update_issue.assign_review(99)
     assert reviewer == '@alice'
-    mock_subprocess_run.assert_called_once_with([
-        'gh',
-        'issue',
-        'edit',
-        '99',
-        '--add-assignee',
-        'alice',
-    ], check=True)
+    mock_subprocess_run.assert_called_once_with(
+        [
+            'gh',
+            'issue',
+            'edit',
+            '99',
+            '--add-assignee',
+            'alice',
+        ],
+        check=True,
+    )
 
 
 @mock.patch('subprocess.run')
@@ -114,91 +120,6 @@ https://docs.example.com
     assert (
         details['security_link'] == 'https://github.com/canonical/my-charm/blob/main/SECURITY.md'
     )
-
-
-def test_extract_best_practice_blocks_markdown(tmp_path):
-    md_file = tmp_path / 'test.md'
-    md_file.write_text(
-        """
-Some intro text
-
-```{admonition} Best practice
-:class: hint
-
-This is a markdown best practice block.
-```
-
-Other text
-
-```{admonition} Best practice
-:class: hint
-
-Another best practice block.
-```
-
-Here is some more text.
-```{tip}
-
-This is just a tip, not a best practice.
-```
-
-Summary text.
-"""
-    )
-    blocks = update_issue.extract_best_practice_blocks(md_file)
-    assert 'This is a markdown best practice block.' in blocks[0]
-    assert 'Another best practice block.' in blocks[1]
-
-
-def test_extract_best_practice_blocks_rest(tmp_path):
-    rst_file = tmp_path / 'test.rst'
-    rst_file.write_text(
-        """
-Some intro text
-
-.. admonition:: Best practice
-    :class: hint
-
-    This is a ReST best practice block.
-
-Other text
-
-.. admonition:: Best practice
-    :class: hint
-
-    Another best practice block.
-"""
-    )
-    blocks = update_issue.extract_best_practice_blocks(rst_file)
-    assert 'This is a ReST best practice block.' in blocks[0]
-    assert 'Another best practice block.' in blocks[1]
-
-
-def test_find_best_practices(tmp_path):
-    ops_dir = tmp_path / 'ops'
-    charmcraft_dir = tmp_path / 'charmcraft'
-    ops_dir.mkdir()
-    charmcraft_dir.mkdir()
-    (ops_dir / 'file1.md').write_text(
-        """
-```{admonition} Best practice
-:class: hint
-
-Ops best practice.
-```
-"""
-    )
-    (charmcraft_dir / 'file2.rst').write_text(
-        """
-.. admonition:: Best practice
-    :class: hint
-
-    Charmcraft best practice.
-"""
-    )
-    practices = update_issue.find_best_practices(ops_dir, charmcraft_dir)
-    assert any('Ops best practice.' in p for p in practices)
-    assert any('Charmcraft best practice.' in p for p in practices)
 
 
 def test_issue_summary():

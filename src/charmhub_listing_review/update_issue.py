@@ -34,21 +34,15 @@ import pathlib
 import random
 import re
 import subprocess  # noqa: S404
-import sys
+import urllib.error
+import urllib.request
 from typing import TypedDict, cast
 
 import yaml
 
 from .evaluate import evaluate
 
-BEST_PRACTICE_RE_MD = re.compile(
-    r'```{admonition} Best practice\s*(?:.*?\n)?([\s\S]*?)```',
-    re.MULTILINE,
-)
-BEST_PRACTICE_RE_REST = re.compile(
-    r'^\.\. admonition:: Best practice\s*\n\s*:class: hint\s*\n\s*\n([\s\S]*?)(?=\n\.\. |\n\n|\Z)',
-    re.MULTILINE,
-)
+BEST_PRACTICE_SOURCE = 'https://github.com/canonical/operator/raw/refs/heads/review-process-and-best-practices/docs/reuse/best-practices.txt'
 
 
 def issue_summary(name: str):
@@ -62,8 +56,6 @@ def issue_comment(
     ci_release_url: str,
     ci_integration_url: str,
     documentation_link: str,
-    path_to_ops: pathlib.Path,
-    path_to_charmcraft: pathlib.Path,
 ):
     """Provide a suitable issue comment.
 
@@ -113,9 +105,13 @@ A charm's documentation should focus on the charm itself. For workload-specific 
     )
 
     # fmt: on
-    best_practices = find_best_practices(
-        path_to_ops=path_to_ops, path_to_charmcraft=path_to_charmcraft
-    )
+    try:
+        with urllib.request.urlopen(BEST_PRACTICE_SOURCE) as response:  # noqa: S310
+            best_practices = response.read().decode().splitlines()
+    except (urllib.error.URLError, urllib.error.HTTPError):
+        best_practices = []
+    # Remove the headings and empty lines.
+    best_practices = [line for line in best_practices if line.startswith('-')]
     if best_practices:
         description.append('\n\n')
         description.append(
@@ -125,48 +121,13 @@ A charm's documentation should focus on the charm itself. For workload-specific 
 The following best practices are recommended for all charms, and are also
 required for listing.
 
-{'\n'.join(('* [ ] ' + p) for p in best_practices)}
+{'\n'.join(('* [ ] ' + p.removeprefix('- ')) for p in best_practices)}
 """.strip()
         )
 
     description.append('\n```\n</details>\n')
 
     return ''.join(description)
-
-
-def extract_best_practice_blocks(file_path: pathlib.Path):
-    """Extracts 'Best practice' blocks from a file."""
-    remove_pattern: str | None = None
-    matches: list[str] = []
-    content = file_path.read_text()
-    if file_path.suffix == '.md':
-        matches = BEST_PRACTICE_RE_MD.findall(content)
-        remove_pattern = r'^:class: hint\s*\n'
-    elif file_path.suffix == '.rst':
-        matches = BEST_PRACTICE_RE_REST.findall(content)
-        remove_pattern = r'^\s+'
-    assert remove_pattern is not None, 'Unsupported file type for best practices extraction.'
-    if not matches:
-        return matches
-    return [
-        re.sub(remove_pattern, '', match, flags=re.MULTILINE).strip().replace('\n', ' ')
-        for match in matches
-    ]
-
-
-def find_best_practices(path_to_ops: pathlib.Path, path_to_charmcraft: pathlib.Path):
-    """Recursively located best practice blocks in Ops and Charmcraft."""
-    checklist: list[str] = []
-    for directory in (path_to_ops, path_to_charmcraft):
-        for file_path in directory.rglob('*'):
-            if file_path.suffix in ('.md', '.rst'):
-                practices = (
-                    practice
-                    for practice in extract_best_practice_blocks(file_path)
-                )
-                checklist.extend(practices)
-    checklist.sort()
-    return checklist
 
 
 class _IssueData(TypedDict):
@@ -243,7 +204,7 @@ def assign_review(issue_number: int, dry_run: bool = False):
     are expected to simply ping them in a comment. Once they have submitted
     their review, the author can interact with them in the usual way.
     """
-     # TODO: Figure out where this should be and how the script should locate it.
+    # TODO: Figure out where this should be and how the script should locate it.
     reviewers_file = pathlib.Path(
         '/home/runner/work/charmhub-listing-review/charmhub-listing-review/reviewers.yaml'
     )
@@ -360,18 +321,6 @@ def main():
     parser.add_argument(
         '--dry-run', action='store_true', help='Do not update the issue, just print the output'
     )
-    parser.add_argument(
-        '--path-to-ops',
-        type=pathlib.Path,
-        default=pathlib.Path(__file__).parent.parent / 'operator',
-        help='Path to a clone of canonical/operator (to get best practices)',
-    )
-    parser.add_argument(
-        '--path-to-charmcraft',
-        type=pathlib.Path,
-        default=pathlib.Path(__file__).parent.parent / 'charmcraft',
-        help='Path to a clone of canonical/charmcraft (to get best practices)',
-    )
     args = parser.parse_args()
 
     issue_data = get_details_from_issue(args.issue_number)
@@ -383,8 +332,6 @@ def main():
         issue_data['ci_release_url'],
         issue_data['ci_integration_url'],
         issue_data['documentation_link'],
-        args.path_to_ops,
-        args.path_to_charmcraft,
     )
     comment = apply_automated_checks(issue_data, comment)
 

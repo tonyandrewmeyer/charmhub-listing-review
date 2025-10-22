@@ -260,9 +260,14 @@ def check_charm_name(charm_name: str) -> str:
         r'\s+',
         ' ',
         """
-    * [ ] The name should be slug-oriented (ASCII lowercase letters, numbers, and hyphens) and
-    follow the pattern ``<workload name in full>[<function>][-k8s]``. For example,
-    ``argo-server-k8s``.
+    * [ ] The charm name should be slug-oriented (ASCII lowercase letters, numbers, and hyphens)
+    and follow the pattern ``<workload name in full>[<function>][-k8s]``. For example,
+    ``argo-server-k8s``. Include the ``-k8s`` suffix on all charms that run on a Kubernetes cloud,
+    unless the charm has no workload or you know that there will never be a machine version of the
+    charm. Don't include an organization or publisher in the name. Don't add an ``operator`` or
+    ``charm`` prefix or suffix. For naming a repository, see
+    {external+charmcraft:ref}`initialise-a-charm`.
+    See {external+charmcraft:ref}`name <charmcraft-yaml-key-name>`.
     """,
     ).strip()
     if _validate_action_or_config_name(charm_name):
@@ -284,15 +289,16 @@ def action_names(repo_dir: pathlib.Path) -> str:
         r'\s+',
         ' ',
         """
-    * [ ] Prefer lowercase alphanumeric names, and use hyphens (-) to separate words. For charms
-    that have already standardised on underscores, it is not necessary to change them, and it is
-    better to be consistent within a charm then to have some action names be dashed and some be
-    underscored.
+    * [ ] Prefer lowercase alphanumeric action names, and use hyphens (-) to separate words.
+    For charms that have already standardised on underscores, it is not necessary to change them,
+    and it is better to be consistent within a charm then to have some action names be dashed and
+    some be underscored. See {external+charmcraft:ref}`actions <charmcraft-yaml-key-actions>`.
     """,
     ).strip()
     data = _get_charmcraft_yaml(repo_dir)
     if not data or 'actions' not in data:
-        return description
+        # No actions means that everything is fine in terms of names.
+        return description.replace('* [ ]', '* [x]')
     actions = data.get('actions', {})
     for name in actions:
         if not _validate_action_or_config_name(name):
@@ -315,15 +321,16 @@ def option_names(repo_dir: pathlib.Path) -> str:
         r'\s+',
         ' ',
         """
-    * [ ] Prefer lowercase alphanumeric names, separated with dashes if required. For charms that
-    have already standardised on underscores, it is not necessary to change them, and it is better
-    to be consistent within a charm then to have some config names be dashed and some be
-    underscored.
+    * [ ] Prefer lowercase alphanumeric option names, separated with dashes if required.
+    For charms that have already standardised on underscores, it is not necessary to change them,
+    and it is better to be consistent within a charm then to have some config names be dashed and
+    some be underscored. See {external+charmcraft:ref}`config <charmcraft-yaml-key-config>`.
     """,
     ).strip()
     data = _get_charmcraft_yaml(repo_dir)
     if not data or 'config' not in data:
-        return description
+        # No options means that everything is fine in terms of names.
+        return description.replace('* [ ]', '* [x]')
     options = data.get('config', {}).get('options', {})
     for name in options:
         if not _validate_action_or_config_name(name):
@@ -338,9 +345,11 @@ def repository_name(repository_url: str, charm_name: str) -> str:
         r'\s+',
         ' ',
         """
-    * [ ] Name the repository using the pattern ``<charm name>-operator`` for a single charm, or
-    ``<base charm name>-operators`` when the repository will hold multiple related charms. For the
-    charm name, see {external+charmcraft:ref}`Charmcraft | Specify a name <specify-a-name>`.
+    * [ ] Name the repository using the pattern ``<charm name>-operator`` for a single charm,
+      or ``<base charm name>-operators`` when the repository will hold multiple related charms.
+      For the charm name, see {external+charmcraft:ref}`Charmcraft | Specify a name
+      <specify-a-name>`. See [Create a repository and initialise it]
+      (#create-a-repository-and-initialise-it).
     """,
     ).strip()
     repo_name = repository_url.rstrip('/').split('/')[-1]
@@ -369,9 +378,10 @@ def relations_includes_optional(repo_dir: pathlib.Path) -> str:
         r'\s+',
         ' ',
         """
-    * [ ] Always include the ``optional`` key, rather than relying on the default value to
-    indicate that the relation is required. Although this field is not enforced by Juju, including
-    it makes it clear to users (and other tools) whether the relation is required.
+    * [ ] Include the ``optional`` key in all endpoint definitions, rather than relying on the
+    default value to indicate that the relation is required. Although this field is not enforced
+    by Juju, including it makes it clear to users (and other tools) whether the relation is
+    required. See {external+charmcraft:ref}`<endpoint role> <charmcraft-yaml-key-requires>`.
     """,
     ).strip()
     data = _get_charmcraft_yaml(repo_dir)
@@ -400,7 +410,7 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> str:
     * [ ] All charms should provide the commands configured by the Charmcraft profile, to allow
     easy testing across the charm ecosystem. It's fine to tweak the configuration of individual
     tools, or to add additional commands, but keep the command names and meanings that the profile
-    provides.
+    provides. See [Develop your charm](#develop-your-charm).
     """,
     ).strip()
     tooling_files = ['Makefile', 'Justfile', 'tox.ini']
