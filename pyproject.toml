@@ -34,6 +34,7 @@ unit = [
 
 [project.scripts]
 update-issue = "charmhub_listing_review.update_issue:main"
+self-review = "charmhub_listing_review.self_review:main"
 
 # Testing tools configuration
 [tool.coverage.run]

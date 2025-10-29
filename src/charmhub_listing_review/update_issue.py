@@ -42,7 +42,7 @@ import yaml
 
 from .evaluate import evaluate
 
-BEST_PRACTICE_SOURCE = 'https://github.com/canonical/operator/raw/refs/heads/review-process-and-best-practices/docs/reuse/best-practices.txt'
+BEST_PRACTICE_SOURCE = 'https://raw.githubusercontent.com/canonical/operator/refs/heads/main/docs/reuse/best-practices.txt'
 
 
 def issue_summary(name: str):

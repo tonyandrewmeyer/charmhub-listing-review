@@ -589,9 +589,17 @@ def charm_lib_docs(repo_dir: pathlib.Path) -> str:
     """If the charm contains Charmhub libraries, they are appropriately documented."""
     # We don't actually automate checking this, we just provide (or not) the
     # checks the reviewer is expected to do.
-    with (repo_dir / 'charmcraft.yaml').open() as f:
-        data = yaml.safe_load(f)
-        charm_name = data['name']
+    charmcraft_path = repo_dir / 'charmcraft.yaml'
+    if not charmcraft_path.exists():
+        return ''
+    try:
+        with charmcraft_path.open() as f:
+            data = yaml.safe_load(f)
+            charm_name = data.get('name', '')
+            if not charm_name:
+                return ''
+    except (yaml.YAMLError, OSError, KeyError):
+        return ''
     if not (repo_dir / 'lib' / 'charms' / charm_name).glob('*/*.py'):
         # The charm does not provide a Charmhub library, so skip including any items.
         return ''
