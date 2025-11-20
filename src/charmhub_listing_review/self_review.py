@@ -143,10 +143,10 @@ def print_self_review_results(
     completed_count = comment.count('* [x]')
     failed_count = comment.count('* [o]')
     unknown_count = comment.count('* [ ]')
-    total_count = completed_count + failed_count + unknown_count
 
     print(
-        f'\n\033[1m📊 Progress: {completed_count} passed, {failed_count} failed, {unknown_count} manual review needed\033[0m'
+        f'\n\033[1m📊 Progress: {completed_count} passed, {failed_count} failed, '
+        f'{unknown_count} manual review needed\033[0m'
     )
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')
