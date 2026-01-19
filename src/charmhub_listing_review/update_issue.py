@@ -190,9 +190,7 @@ def get_details_from_issue(issue_number: int):
     return cast('_IssueData', issue_data)
 
 
-def assign_review(
-    issue_number: int, reviewers_file: pathlib.Path, dry_run: bool = False
-):
+def assign_review(issue_number: int, reviewers_file: pathlib.Path, dry_run: bool = False):
     """Assign the issue to a team.
 
     We assign the issue to a single person (generally the manager) from a
