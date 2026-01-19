@@ -34,8 +34,6 @@ jobs:
         env:
             GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-            # TODO: This is not the best way to run the script, we should clean this up, but just
-            # getting it working for now.
             uv venv
             uv pip install .
-            uv run update-issue --issue-number "${{ github.event.issue.number }}"
+            uv run update-issue --issue-number "${{ github.event.issue.number }}" --reviewers-file "${{ github.workspace }}/reviewers.yaml"

@@ -190,7 +190,9 @@ def get_details_from_issue(issue_number: int):
     return cast('_IssueData', issue_data)
 
 
-def assign_review(issue_number: int, dry_run: bool = False):
+def assign_review(
+    issue_number: int, reviewers_file: pathlib.Path, dry_run: bool = False
+):
     """Assign the issue to a team.
 
     We assign the issue to a single person (generally the manager) from a
@@ -204,10 +206,6 @@ def assign_review(issue_number: int, dry_run: bool = False):
     are expected to simply ping them in a comment. Once they have submitted
     their review, the author can interact with them in the usual way.
     """
-    # TODO: Figure out where this should be and how the script should locate it.
-    reviewers_file = pathlib.Path(
-        '/home/runner/work/charmhub-listing-review/charmhub-listing-review/reviewers.yaml'
-    )
     with reviewers_file.open('r') as f:
         reviewers_data = yaml.safe_load(f)
     reviewers = reviewers_data['reviewers']
@@ -226,7 +224,13 @@ def assign_review(issue_number: int, dry_run: bool = False):
     return reviewer
 
 
-def update_gh_issue(issue_number: int, summary: str, comment: str, dry_run: bool = False):
+def update_gh_issue(
+    issue_number: int,
+    summary: str,
+    comment: str,
+    reviewers_file: pathlib.Path,
+    dry_run: bool = False,
+):
     """Update the specified GitHub issue with the latest generated comment."""
     # Update the issue title.
     if dry_run:
@@ -245,7 +249,11 @@ def update_gh_issue(issue_number: int, summary: str, comment: str, dry_run: bool
         text=True,
     )
     assignees = json.loads(gh.stdout.strip()).get('assignees', [])
-    manager = assignees[0]['login'] if assignees else assign_review(issue_number, dry_run)
+    manager = (
+        assignees[0]['login']
+        if assignees
+        else assign_review(issue_number, reviewers_file, dry_run)
+    )
     request_review = re.sub(
         r'\s',
         ' ',
@@ -319,6 +327,12 @@ def main():
         '--issue-number', type=int, help='The issue number to update', required=True
     )
     parser.add_argument(
+        '--reviewers-file',
+        type=pathlib.Path,
+        help='Path to the reviewers YAML file',
+        required=True,
+    )
+    parser.add_argument(
         '--dry-run', action='store_true', help='Do not update the issue, just print the output'
     )
     args = parser.parse_args()
@@ -335,7 +349,13 @@ def main():
     )
     comment = apply_automated_checks(issue_data, comment)
 
-    update_gh_issue(args.issue_number, summary, comment, dry_run=args.dry_run)
+    update_gh_issue(
+        args.issue_number,
+        summary,
+        comment,
+        args.reviewers_file,
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == '__main__':
