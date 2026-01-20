@@ -4,19 +4,36 @@ reviewers:
     "@benhoyt":
         name: "Ben Hoyt"
         team: "Charm Tech"
-    "@tonyandrewmeyer":
-        name: "Tony Meyer"
-        team: "Charm Tech"
-    "@dimaqq":
-        name: "Dima Tisnek"
-        team: "Charm Tech"
-    "@dwilding":
-        name: "David Wilding"
-        team: "Charm Tech"
-    # As a Prof I, James isn't expected to do reviews, but for the evaluation
-    # cycle, he's helping out.
-    "@james-garner-canonical":
-        name: "James Garner"
-        team: "Charm Tech"
-    # Once the evaluation cycle is over, we'd add one person from each charming
-    # team here as well, and give them triage permissions in the repository.
+    "@DnPlas":
+        name: "Daniela Plascencia"
+        team: "Analytics (1)"
+    "@sed-i":
+        name: "Leon Mintz"
+        team: "Observability Core"
+    "@ppasotti":
+        name: "Pietro Pasotti"
+        team: "Observability Tracing"
+    "@simskij":
+        name: "Simon Aronsson"
+        team: "Observability"
+    "@marcoppenheimer":
+        name: "Marc Oppenheimer"
+        team: "NoSQL (1)"
+    "@Mehdi-Bendriss":
+        name: "Mehdi Bendriss"
+        team: "NoSQL (2)"
+    "@taurus-forever":
+        name: "Alex Lutay"
+        team: "SQL (1)"
+    "@paulomach":
+        name: "Paulo Machado"
+        team: "SQL (2)"
+    "@deusebio":
+        name: "Enrico Deusebio"
+        team: "Analytics (2)"
+    "@shipperizer":
+        name: "Alessandro Cabbia"
+        team: "Identity (1)"
+    "@VercinGor":
+        name: "Goran Stojanoski"
+        team: "Identity (2)"
