@@ -10,7 +10,7 @@ reviewers:
     "@sed-i":
         name: "Leon Mintz"
         team: "Observability Core"
-    "@ppasotti":
+    "@pietropasotti":
         name: "Pietro Pasotti"
         team: "Observability Tracing"
     "@simskij":
