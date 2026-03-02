@@ -82,6 +82,59 @@ def test_assign_review_single_team(mock_open, mock_yaml_load, mock_subprocess_ru
 
 
 @mock.patch('subprocess.run')
+def test_assign_to_overrides_automatic_assignment(mock_subprocess_run):
+    empty_comments = json.dumps({'comments': []})
+    mock_subprocess_run.return_value = mock.Mock(returncode=0, stdout=empty_comments)
+    update_issue.update_gh_issue(
+        issue_number=42,
+        summary='Review `my-charm` for public listing on Charmhub',
+        comment='test comment',
+        reviewers_file=pathlib.Path('reviewers.yaml'),
+        assign_to='tonyandrewmeyer',
+    )
+    # Should assign to the specified user, not pick randomly.
+    mock_subprocess_run.assert_any_call(
+        ['gh', 'issue', 'edit', '42', '--add-assignee', 'tonyandrewmeyer'],
+        check=True,
+    )
+
+
+@mock.patch('subprocess.run')
+def test_assign_to_strips_at_prefix(mock_subprocess_run):
+    empty_comments = json.dumps({'comments': []})
+    mock_subprocess_run.return_value = mock.Mock(returncode=0, stdout=empty_comments)
+    update_issue.update_gh_issue(
+        issue_number=42,
+        summary='Review `my-charm` for public listing on Charmhub',
+        comment='test comment',
+        reviewers_file=pathlib.Path('reviewers.yaml'),
+        assign_to='@tonyandrewmeyer',
+    )
+    mock_subprocess_run.assert_any_call(
+        ['gh', 'issue', 'edit', '42', '--add-assignee', 'tonyandrewmeyer'],
+        check=True,
+    )
+
+
+@mock.patch('subprocess.run')
+def test_assign_to_dry_run_does_not_call_gh(mock_subprocess_run):
+    empty_comments = json.dumps({'comments': []})
+    mock_subprocess_run.return_value = mock.Mock(returncode=0, stdout=empty_comments)
+    update_issue.update_gh_issue(
+        issue_number=42,
+        summary='Review `my-charm` for public listing on Charmhub',
+        comment='test comment',
+        reviewers_file=pathlib.Path('reviewers.yaml'),
+        dry_run=True,
+        assign_to='tonyandrewmeyer',
+    )
+    # In dry-run with assign_to, no gh issue edit calls should be made.
+    for call in mock_subprocess_run.call_args_list:
+        args = call[0][0] if call[0] else call[1].get('args', [])
+        assert '--add-assignee' not in args
+
+
+@mock.patch('subprocess.run')
 def test_get_details_from_issue(mock_subprocess_run):
     issue_body = """
 ### Charm name

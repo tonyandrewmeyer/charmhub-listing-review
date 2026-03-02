@@ -232,6 +232,7 @@ def update_gh_issue(
     comment: str,
     reviewers_file: pathlib.Path,
     dry_run: bool = False,
+    assign_to: str | None = None,
 ):
     """Update the specified GitHub issue with the latest generated comment."""
     # Update the issue title.
@@ -244,18 +245,27 @@ def update_gh_issue(
             check=True,
         )
 
-    # Assign the issue, if it is not already.
-    gh = subprocess.run(
-        ['gh', 'issue', 'view', str(issue_number), '--json', 'assignees'],
-        capture_output=True,
-        text=True,
-    )
-    assignees = json.loads(gh.stdout.strip()).get('assignees', [])
-    manager = (
-        assignees[0]['login']
-        if assignees
-        else assign_review(issue_number, reviewers_file, dry_run)
-    )
+    # Assign the issue to the specified reviewer, or pick one automatically.
+    if assign_to:
+        username = assign_to.removeprefix('@')
+        if not dry_run:
+            subprocess.run(
+                ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', username],
+                check=True,
+            )
+        manager = f'@{username}'
+    else:
+        gh = subprocess.run(
+            ['gh', 'issue', 'view', str(issue_number), '--json', 'assignees'],
+            capture_output=True,
+            text=True,
+        )
+        assignees = json.loads(gh.stdout.strip()).get('assignees', [])
+        manager = (
+            assignees[0]['login']
+            if assignees
+            else assign_review(issue_number, reviewers_file, dry_run)
+        )
     request_review = re.sub(
         r'\s',
         ' ',
@@ -339,6 +349,11 @@ def main():
     parser.add_argument(
         '--dry-run', action='store_true', help='Do not update the issue, just print the output'
     )
+    parser.add_argument(
+        '--assign-to',
+        type=str,
+        help='Override automatic reviewer assignment with this GitHub username',
+    )
     args = parser.parse_args()
 
     issue_data = get_details_from_issue(args.issue_number)
@@ -359,6 +374,7 @@ def main():
         comment,
         args.reviewers_file,
         dry_run=args.dry_run,
+        assign_to=args.assign_to,
     )
 
 
