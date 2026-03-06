@@ -14,7 +14,7 @@ wheels = [
 [[package]]
 name = "charmhub-listing-review"
 version = "1.0.0b1"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
