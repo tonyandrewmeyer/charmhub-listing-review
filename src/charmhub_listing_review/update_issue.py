@@ -194,6 +194,24 @@ def get_details_from_issue(issue_number: int):
     return cast('_IssueData', issue_data)
 
 
+def _add_assignee(issue_number: int, username: str):
+    """Add an assignee to an issue using the REST API.
+
+    Using the REST API directly rather than ``gh issue edit --add-assignee``
+    because the latter uses GraphQL to resolve usernames, which can fail with
+    the GITHUB_TOKEN in GitHub Actions.
+    """
+    subprocess.run(
+        [
+            'gh', 'api',
+            f'repos/{{owner}}/{{repo}}/issues/{issue_number}/assignees',
+            '-f', f'assignees[]={username}',
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+
 def assign_review(issue_number: int, reviewers_file: pathlib.Path, dry_run: bool = False):
     """Assign the issue to a team.
 
@@ -219,10 +237,7 @@ def assign_review(issue_number: int, reviewers_file: pathlib.Path, dry_run: bool
     reviewer = random.choice(team_reviewers)  # noqa: S311
 
     if not dry_run:
-        subprocess.run(
-            ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', reviewer[1:]],
-            check=True,
-        )
+        _add_assignee(issue_number, reviewer[1:])
     return reviewer
 
 
@@ -249,10 +264,7 @@ def update_gh_issue(
     if assign_to:
         username = assign_to.removeprefix('@')
         if not dry_run:
-            subprocess.run(
-                ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', username],
-                check=True,
-            )
+            _add_assignee(issue_number, username)
         manager = f'@{username}'
     else:
         gh = subprocess.run(
