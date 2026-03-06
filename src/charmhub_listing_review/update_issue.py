@@ -203,9 +203,11 @@ def _add_assignee(issue_number: int, username: str):
     """
     subprocess.run(
         [
-            'gh', 'api',
+            'gh',
+            'api',
             f'repos/{{owner}}/{{repo}}/issues/{issue_number}/assignees',
-            '-f', f'assignees[]={username}',
+            '-f',
+            f'assignees[]={username}',
         ],
         check=True,
         stdout=subprocess.DEVNULL,

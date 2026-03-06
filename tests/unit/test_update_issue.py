@@ -95,9 +95,11 @@ def test_assign_to_overrides_automatic_assignment(mock_subprocess_run):
     # Should assign to the specified user, not pick randomly.
     mock_subprocess_run.assert_any_call(
         [
-            'gh', 'api',
+            'gh',
+            'api',
             'repos/{owner}/{repo}/issues/42/assignees',
-            '-f', 'assignees[]=tonyandrewmeyer',
+            '-f',
+            'assignees[]=tonyandrewmeyer',
         ],
         check=True,
         stdout=mock.ANY,
@@ -117,9 +119,11 @@ def test_assign_to_strips_at_prefix(mock_subprocess_run):
     )
     mock_subprocess_run.assert_any_call(
         [
-            'gh', 'api',
+            'gh',
+            'api',
             'repos/{owner}/{repo}/issues/42/assignees',
-            '-f', 'assignees[]=tonyandrewmeyer',
+            '-f',
+            'assignees[]=tonyandrewmeyer',
         ],
         check=True,
         stdout=mock.ANY,
