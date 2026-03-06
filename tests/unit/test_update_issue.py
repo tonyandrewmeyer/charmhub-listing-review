@@ -44,13 +44,13 @@ def test_assign_review_multiple_teams(
     mock_subprocess_run.assert_called_once_with(
         [
             'gh',
-            'issue',
-            'edit',
-            '42',
-            '--add-assignee',
-            'bob',
+            'api',
+            'repos/{owner}/{repo}/issues/42/assignees',
+            '-f',
+            'assignees[]=bob',
         ],
         check=True,
+        stdout=mock.ANY,
     )
 
 
@@ -71,13 +71,13 @@ def test_assign_review_single_team(mock_open, mock_yaml_load, mock_subprocess_ru
     mock_subprocess_run.assert_called_once_with(
         [
             'gh',
-            'issue',
-            'edit',
-            '99',
-            '--add-assignee',
-            'alice',
+            'api',
+            'repos/{owner}/{repo}/issues/99/assignees',
+            '-f',
+            'assignees[]=alice',
         ],
         check=True,
+        stdout=mock.ANY,
     )
 
 
@@ -94,8 +94,15 @@ def test_assign_to_overrides_automatic_assignment(mock_subprocess_run):
     )
     # Should assign to the specified user, not pick randomly.
     mock_subprocess_run.assert_any_call(
-        ['gh', 'issue', 'edit', '42', '--add-assignee', 'tonyandrewmeyer'],
+        [
+            'gh',
+            'api',
+            'repos/{owner}/{repo}/issues/42/assignees',
+            '-f',
+            'assignees[]=tonyandrewmeyer',
+        ],
         check=True,
+        stdout=mock.ANY,
     )
 
 
@@ -111,8 +118,15 @@ def test_assign_to_strips_at_prefix(mock_subprocess_run):
         assign_to='@tonyandrewmeyer',
     )
     mock_subprocess_run.assert_any_call(
-        ['gh', 'issue', 'edit', '42', '--add-assignee', 'tonyandrewmeyer'],
+        [
+            'gh',
+            'api',
+            'repos/{owner}/{repo}/issues/42/assignees',
+            '-f',
+            'assignees[]=tonyandrewmeyer',
+        ],
         check=True,
+        stdout=mock.ANY,
     )
 
 
@@ -128,10 +142,10 @@ def test_assign_to_dry_run_does_not_call_gh(mock_subprocess_run):
         dry_run=True,
         assign_to='tonyandrewmeyer',
     )
-    # In dry-run with assign_to, no gh issue edit calls should be made.
+    # In dry-run with assign_to, no assignee API calls should be made.
     for call in mock_subprocess_run.call_args_list:
         args = call[0][0] if call[0] else call[1].get('args', [])
-        assert '--add-assignee' not in args
+        assert not any('assignees' in str(a) for a in args)
 
 
 @mock.patch('subprocess.run')
