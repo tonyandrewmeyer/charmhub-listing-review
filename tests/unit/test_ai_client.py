@@ -151,6 +151,98 @@ def test_generate_summary():
     assert 'Check B' in summary
 
 
+def test_assess_documentation():
+    from charmhub_listing_review.ai_client import assess_documentation
+
+    doc_context = {
+        'readme_content': '# My Charm\nA charm for things.',
+        'doc_files': ['docs/tutorial.md', 'docs/reference.md'],
+        'documentation_url': 'https://docs.example.com',
+    }
+
+    with (
+        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
+        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
+        mock.patch(
+            'charmhub_listing_review.ai_client.create_session',
+            new_callable=mock.AsyncMock,
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_client.send_prompt',
+            new_callable=mock.AsyncMock,
+            return_value='Needs work: missing usage examples.',
+        ) as mock_send,
+    ):
+        result = asyncio.run(assess_documentation(doc_context))
+
+    assert 'usage examples' in result
+    prompt_arg = mock_send.call_args[0][1]
+    assert 'My Charm' in prompt_arg
+    assert 'docs/tutorial.md' in prompt_arg
+
+
+def test_assess_metadata():
+    from charmhub_listing_review.ai_client import assess_metadata
+
+    charmcraft_data = {
+        'name': 'my-charm',
+        'title': 'My Charm',
+        'summary': 'A test charm.',
+        'description': 'This charm does things.',
+    }
+
+    with (
+        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
+        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
+        mock.patch(
+            'charmhub_listing_review.ai_client.create_session',
+            new_callable=mock.AsyncMock,
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_client.send_prompt',
+            new_callable=mock.AsyncMock,
+            return_value='- Summary: Good.\n- Description: Needs more detail.',
+        ) as mock_send,
+    ):
+        result = asyncio.run(assess_metadata(charmcraft_data))
+
+    assert 'Description' in result
+    prompt_arg = mock_send.call_args[0][1]
+    assert 'My Charm' in prompt_arg
+
+
+def test_assess_metadata_empty():
+    from charmhub_listing_review.ai_client import assess_metadata
+
+    result = asyncio.run(assess_metadata({}))
+    assert result == ''
+
+
+def test_gather_doc_context(tmp_path):
+    from charmhub_listing_review.evaluate import _gather_doc_context
+
+    readme = tmp_path / 'README.md'
+    readme.write_text('# My Charm\nSome docs here.')
+    docs_dir = tmp_path / 'docs'
+    docs_dir.mkdir()
+    (docs_dir / 'tutorial.md').write_text('# Tutorial')
+
+    charmcraft = {'links': {'documentation': 'https://docs.example.com'}}
+    ctx = _gather_doc_context(tmp_path, charmcraft)
+
+    assert '# My Charm' in ctx['readme_content']
+    assert 'docs/tutorial.md' in ctx['doc_files']
+    assert ctx['documentation_url'] == 'https://docs.example.com'
+
+
+def test_gather_doc_context_no_docs(tmp_path):
+    from charmhub_listing_review.evaluate import _gather_doc_context
+
+    ctx = _gather_doc_context(tmp_path, None)
+    assert 'readme_content' not in ctx
+    assert 'doc_files' not in ctx
+
+
 def test_generate_summary_with_metadata():
     results = [_make_result('check_a', passed=True, description='* [x] Check A.')]
     metadata = {'name': 'my-charm', 'title': 'My Charm', 'summary': 'A test charm.'}
