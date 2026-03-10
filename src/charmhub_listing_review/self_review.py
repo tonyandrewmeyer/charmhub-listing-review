@@ -30,14 +30,27 @@ console in a user-friendly format instead of updating a GitHub issue.
 """
 
 import argparse
+import asyncio
 import sys
+import textwrap
 
-from .evaluate import evaluate
+from .ai_client import explain_failures, is_ai_available
+from .evaluate import CheckResult, evaluate
 from .update_issue import issue_comment
 
 
-def format_checklist_for_console(checklist_markdown: str) -> str:
-    """Format the markdown checklist for console output."""
+def format_checklist_for_console(
+    checklist_markdown: str,
+    ai_explanations: dict[str, str] | None = None,
+) -> str:
+    """Format the markdown checklist for console output.
+
+    Args:
+        checklist_markdown: The markdown checklist string.
+        ai_explanations: Optional mapping of unchecked description -> AI explanation.
+    """
+    if ai_explanations is None:
+        ai_explanations = {}
     lines = checklist_markdown.split('\n')
     formatted_lines = []
     for line in lines:
@@ -47,6 +60,14 @@ def format_checklist_for_console(checklist_markdown: str) -> str:
         elif line.strip().startswith('* [o]'):
             item_text = line.replace('* [o]', '').strip()
             formatted_lines.append(f' ❌ {item_text}')
+            # Show AI explanation if available for this failed check.
+            unchecked_key = line.strip().replace('* [o]', '* [ ]')
+            explanation = ai_explanations.get(unchecked_key)
+            if explanation:
+                wrapped = textwrap.fill(
+                    explanation, width=80, initial_indent='    ', subsequent_indent='    '
+                )
+                formatted_lines.append(f'\033[2m{wrapped}\033[0m')  # dim text
         elif line.strip().startswith('* [ ]'):
             item_text = line.replace('* [ ]', '').strip()
             formatted_lines.append(f' ❓ {item_text}')
@@ -93,6 +114,9 @@ def print_self_review_results(
     # TODO: it would be great if we had a better wrapping story, both for GitHub and console.
     comment = comment.replace('are also\nrequired for listing.', 'are also required for listing.')
 
+    results: list[CheckResult] = []
+    ai_explanations: dict[str, str] = {}
+
     if project_repo:
         # Like update-issue, this assumes it's GitHub for now.
         contribution_url = f'{project_repo}/blob/main/CONTRIBUTING.md'
@@ -122,6 +146,14 @@ def print_self_review_results(
                         comment = comment.replace(unchecked_version, failed_version)
                     # passed is None means indeterminate, leave as '* [ ]' (unknown)
 
+            # Run AI explanations for failed checks.
+            if is_ai_available():
+                results = asyncio.run(explain_failures(results))
+                for result in results:
+                    if result.ai_explanation:
+                        unchecked_key = result.description.replace('* [x]', '* [ ]')
+                        ai_explanations[unchecked_key] = result.ai_explanation
+
         except Exception as e:
             print('\n⚠️  Warning: Could not run automated checks on repository.')
             print(
@@ -135,7 +167,7 @@ def print_self_review_results(
             else:
                 print(f'   Error details: {e}')
 
-    formatted_checklist = format_checklist_for_console(comment)
+    formatted_checklist = format_checklist_for_console(comment, ai_explanations)
     print(formatted_checklist)
 
     completed_count = comment.count('* [x]')
