@@ -359,3 +359,41 @@ def test_generate_summary_with_metadata():
     # Verify metadata was included in the prompt.
     prompt_arg = mock_send.call_args[0][1]
     assert 'My Charm' in prompt_arg
+
+
+def test_build_context_prompt():
+    from charmhub_listing_review.evaluate import EvaluationResult
+    from charmhub_listing_review.interactive import _build_context_prompt
+
+    evaluation = EvaluationResult(
+        checks=[
+            _make_result('check_a', passed=True, description='* [x] Check A passed.'),
+            _make_result('check_b', passed=False, description='* [ ] Check B failed.'),
+        ],
+        charmcraft_data={'name': 'my-charm', 'title': 'My Charm', 'summary': 'A test.'},
+        doc_context={'readme_content': '# My Charm\nDocs here.'},
+        code_context={'code_files': {'src/charm.py': 'class MyCharm: pass'}},
+    )
+
+    prompt = _build_context_prompt('my-charm', evaluation)
+    assert 'my-charm' in prompt
+    assert '1 passed' in prompt
+    assert '1 failed' in prompt
+    assert 'PASSED' in prompt
+    assert 'FAILED' in prompt
+    assert 'My Charm' in prompt
+    assert '# My Charm' in prompt
+    assert 'class MyCharm' in prompt
+
+
+def test_run_interactive_ai_unavailable(capsys):
+    from charmhub_listing_review.evaluate import EvaluationResult
+    from charmhub_listing_review.interactive import run_interactive
+
+    evaluation = EvaluationResult(checks=[])
+
+    with mock.patch('charmhub_listing_review.interactive.is_ai_available', return_value=False):
+        run_interactive('my-charm', evaluation)
+
+    output = capsys.readouterr().out
+    assert 'Copilot SDK' in output
