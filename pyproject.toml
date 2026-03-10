@@ -21,6 +21,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+ai = [
+    "github-copilot-sdk",
+]
 lint = [
     "ruff~=0.11",
     "codespell~=2.4",
