@@ -90,6 +90,7 @@ def print_self_review_results(
     charm_name: str,
     project_repo: str = '',
     ci_linting: str = '',
+    code_review: bool = False,
 ):
     """Print the self-review results to console."""
     print(f"\n\033[1m🔍 Charmhub Public Listing Self-Review for '{charm_name}'\033[0m")
@@ -123,6 +124,7 @@ def print_self_review_results(
     results: list[CheckResult] = []
     charmcraft_data: dict | None = None
     doc_context: dict = {}
+    code_context: dict = {}
     ai_explanations: dict[str, str] = {}
 
     if project_repo:
@@ -143,6 +145,7 @@ def print_self_review_results(
             results = evaluation.checks
             charmcraft_data = evaluation.charmcraft_data
             doc_context = evaluation.doc_context
+            code_context = evaluation.code_context
 
             for result in results:
                 if not result.description:
@@ -204,11 +207,10 @@ def print_self_review_results(
     )
 
     # Print AI-driven outputs when available.
-    if results and is_ai_available():
-        if ai_summary:
-            print('\n\033[1m🤖 AI Review Summary\033[0m')
-            print('-' * 40)
-            print(ai_summary)
+    if results and is_ai_available() and ai_summary:
+        print('\n\033[1m🤖 AI Review Summary\033[0m')
+        print('-' * 40)
+        print(ai_summary)
 
     if is_ai_available() and doc_context:
         try:
@@ -229,6 +231,19 @@ def print_self_review_results(
                 print(meta_assessment)
         except Exception:  # noqa: S110
             pass
+
+    if is_ai_available() and code_review and code_context.get('code_files'):
+        from .ai_code_review import analyze_code
+
+        try:
+            code_analysis = asyncio.run(analyze_code(code_context['code_files']))
+            if code_analysis:
+                print('\n\033[1m🔬 AI Code Quality Analysis\033[0m')
+                print('-' * 40)
+                print(code_analysis)
+        except Exception:  # noqa: S110
+            pass
+
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')
     print('\n📋 To submit your charm for official review, create an issue at:')
@@ -252,6 +267,11 @@ def main():
         help='URL of the charm repository (e.g., https://github.com/<user>/<workload>-operator)',
     )
     parser.add_argument('--ci-linting-url', help='URL to CI linting workflow')
+    parser.add_argument(
+        '--code-review',
+        action='store_true',
+        help='Enable AI code quality analysis (requires Copilot SDK, slower)',
+    )
 
     args = parser.parse_args()
 
@@ -264,6 +284,7 @@ def main():
             charm_name=args.charm_name,
             project_repo=args.repository,
             ci_linting=args.ci_linting_url or '',
+            code_review=args.code_review,
         )
     except KeyboardInterrupt:
         print('\n\n⚡ Review cancelled by user.')

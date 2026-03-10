@@ -71,6 +71,9 @@ class EvaluationResult:
     doc_context: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Documentation context for AI quality assessment."""
 
+    code_context: dict[str, Any] = dataclasses.field(default_factory=dict)
+    """Code context for AI code quality analysis."""
+
 
 def evaluate(
     charm_name: str,
@@ -107,12 +110,17 @@ def evaluate(
 
         charmcraft_data = _get_charmcraft_yaml(repo_dir)
         doc_context = _gather_doc_context(repo_dir, charmcraft_data)
+
+        from .ai_code_review import collect_code_context
+
+        code_context = collect_code_context(repo_dir)
     finally:
         shutil.rmtree(str(repo_dir), ignore_errors=True)
     return EvaluationResult(
         checks=results,
         charmcraft_data=charmcraft_data,
         doc_context=doc_context,
+        code_context=code_context,
     )
 
 
