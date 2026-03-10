@@ -123,3 +123,56 @@ def test_sanitise_ai_output():
     assert r'\*' in result
     assert r'\_' in result
     assert 'Line one. Line two' in result
+
+
+def test_generate_summary():
+    results = [
+        _make_result('check_a', passed=True, description='* [x] Check A passed.'),
+        _make_result('check_b', passed=False, description='* [ ] Check B failed.'),
+        _make_result('check_c', passed=None, description='* [ ] Check C needs review.'),
+    ]
+
+    with (
+        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
+        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
+        mock.patch(
+            'charmhub_listing_review.ai_client.create_session',
+            new_callable=mock.AsyncMock,
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_client.send_prompt',
+            new_callable=mock.AsyncMock,
+            return_value='- PRIORITY: Fix Check B.\n- GOOD: Check A passes.',
+        ),
+    ):
+        summary = asyncio.run(ai_client.generate_summary('test-charm', results))
+
+    assert 'PRIORITY' in summary
+    assert 'Check B' in summary
+
+
+def test_generate_summary_with_metadata():
+    results = [_make_result('check_a', passed=True, description='* [x] Check A.')]
+    metadata = {'name': 'my-charm', 'title': 'My Charm', 'summary': 'A test charm.'}
+
+    with (
+        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
+        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
+        mock.patch(
+            'charmhub_listing_review.ai_client.create_session',
+            new_callable=mock.AsyncMock,
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_client.send_prompt',
+            new_callable=mock.AsyncMock,
+            return_value='All checks pass.',
+        ) as mock_send,
+    ):
+        summary = asyncio.run(
+            ai_client.generate_summary('my-charm', results, charmcraft_data=metadata)
+        )
+
+    assert summary == 'All checks pass.'
+    # Verify metadata was included in the prompt.
+    prompt_arg = mock_send.call_args[0][1]
+    assert 'My Charm' in prompt_arg

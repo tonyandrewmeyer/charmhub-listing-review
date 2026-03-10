@@ -34,7 +34,7 @@ import asyncio
 import sys
 import textwrap
 
-from .ai_client import explain_failures, is_ai_available
+from .ai_client import explain_failures, generate_summary, is_ai_available
 from .evaluate import CheckResult, evaluate
 from .sphinx_refs import convert_sphinx_refs
 from .update_issue import issue_comment
@@ -191,6 +191,18 @@ def print_self_review_results(
         f'\n\033[1m📊 Progress: {completed_count} passed, {failed_count} failed, '
         f'{unknown_count} manual review needed\033[0m'
     )
+
+    # Generate AI review summary if available.
+    if results and is_ai_available():
+        try:
+            summary = asyncio.run(generate_summary(charm_name, results))
+            if summary:
+                print('\n\033[1m🤖 AI Review Summary\033[0m')
+                print('-' * 40)
+                print(summary)
+        except Exception:  # noqa: S110
+            pass  # AI summary is best-effort; don't disrupt the output.
+
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')
     print('\n📋 To submit your charm for official review, create an issue at:')
