@@ -327,6 +327,113 @@ the markdown checklist posted to review issues must remain the same style
 (`* [x]` / `* [ ]` items) so that the existing reviewer workflow in GitHub
 is not disrupted.
 
+## Security Considerations
+
+The review tool processes arbitrary charm repositories submitted by external
+authors. Sending untrusted content to an LLM introduces several attack
+surfaces that must be considered.
+
+### Prompt Injection
+
+**Threat:** A malicious charm could embed instructions in its README,
+charmcraft.yaml description, code comments, or file names that attempt to
+hijack the LLM's behaviour — for example, instructing it to always report
+"all checks pass" or to output misleading guidance.
+
+**Mitigations:**
+
+- **Structured prompts with clear boundaries.** System prompts should
+  explicitly instruct the model to treat all repository content as untrusted
+  data, not as instructions. Use delimiters (e.g. triple backticks, XML tags)
+  to separate user-controlled content from system instructions.
+- **Output validation.** Do not use raw LLM output to make pass/fail
+  decisions. All deterministic checks remain code-based; AI output is
+  advisory only and clearly labelled as such.
+- **Output sanitisation.** Strip or escape any HTML/markdown from AI
+  responses before inserting them into GitHub issue comments to prevent
+  injection into the issue rendering.
+- **Review AI output.** Human reviewers should treat AI-generated sections
+  (summaries, explanations, assessments) as suggestions, not authoritative
+  judgements.
+
+### Data Exfiltration
+
+**Threat:** A crafted charm could include prompt injection payloads that
+attempt to make the LLM leak sensitive data from the environment — for
+example, environment variables, API tokens, file contents outside the repo,
+or details about the review infrastructure.
+
+**Mitigations:**
+
+- **Restrict tool capabilities.** Any `@define_tool` functions (e.g.
+  `read_file`) must be strictly scoped to the cloned repository directory.
+  Path traversal (e.g. `../../etc/passwd`) must be blocked by validating
+  that resolved paths stay within the repo root.
+- **No environment access.** Tools must not expose environment variables,
+  system information, or network access to the LLM.
+- **Ephemeral clones.** The repository is cloned into a temporary directory
+  and deleted after evaluation. No persistent state from one review leaks
+  into another.
+- **Copilot SDK isolation.** The Copilot CLI handles authentication
+  separately; the SDK session should not have access to credentials beyond
+  what is needed for the API call itself.
+
+### Denial of Service / Resource Exhaustion
+
+**Threat:** A charm repository could contain extremely large files, deeply
+nested directories, or content designed to cause excessive LLM token usage.
+
+**Mitigations:**
+
+- **Content size limits.** All content sent to the LLM is truncated:
+  README to ~4000 chars, code files to ~3000 chars each, maximum 10 code
+  files. These limits are enforced before prompts are constructed.
+- **Timeout handling.** All async LLM calls should have reasonable timeouts
+  to prevent indefinite hangs.
+- **Graceful failure.** All AI calls are wrapped in try/except and treated
+  as best-effort. A slow or failing LLM call never blocks the deterministic
+  review.
+
+### Code Execution
+
+**Threat:** The review tool reads and analyses charm code but should never
+execute it. A malicious charm could attempt to trick the tool or the LLM
+into running arbitrary code.
+
+**Mitigations:**
+
+- **No eval/exec.** The tool never evaluates charm code — it only reads
+  file contents as strings.
+- **LLM sandboxing.** The Copilot SDK does not have the ability to execute
+  arbitrary code on the host. Custom tools are the only way the LLM can
+  interact with the system, and these are explicitly defined and scoped.
+- **Static analysis only.** Phase 4 (code quality) analyses code by sending
+  source text to the LLM, not by importing or running it.
+
+### Supply Chain
+
+**Threat:** The `github-copilot-sdk` dependency itself could be compromised,
+or a typosquatted package could be installed instead.
+
+**Mitigations:**
+
+- **Dependency pinning.** Use locked dependency files (`uv.lock`) to pin
+  exact versions.
+- **Optional dependency group.** The SDK is in an optional `ai` group, so
+  environments that do not need AI features are not exposed to this
+  dependency at all.
+
+### Cross-Review Contamination
+
+**Threat:** If the LLM client or session is reused across reviews, context
+from one charm review could leak into another.
+
+**Mitigations:**
+
+- **Fresh sessions per review.** Each review run creates new Copilot
+  sessions. The client is started and stopped within each AI function call.
+- **No persistent state.** No review data is cached between runs.
+
 ## Testing Strategy
 
 - Mock the Copilot SDK entirely in unit tests.
