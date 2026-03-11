@@ -48,7 +48,7 @@ def _check_ai_available() -> bool:
     provides the Python async API on top of it.
     """
     try:
-        import copilot  # noqa: F401
+        import copilot  # noqa: F401  # ty: ignore[unresolved-import]
     except ImportError:
         return False
     if not shutil.which('copilot'):
@@ -59,7 +59,7 @@ def _check_ai_available() -> bool:
 @functools.cache
 def _get_client():
     """Get or create the shared CopilotClient instance."""
-    from copilot import CopilotClient
+    from copilot import CopilotClient  # ty: ignore[unresolved-import]
 
     return CopilotClient()
 
