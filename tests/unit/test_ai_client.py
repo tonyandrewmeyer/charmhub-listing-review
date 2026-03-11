@@ -14,12 +14,12 @@
 
 """Test the AI client module."""
 
+import asyncio
 from unittest import mock
 
-import asyncio
-
-from charmhub_listing_review.ai_client import is_ai_available
+import charmhub_listing_review.ai_client as ai_client
 from charmhub_listing_review.evaluate import CheckResult
+from charmhub_listing_review.self_review import format_checklist_for_console
 
 
 def _make_result(name, passed, description='* [ ] Test check.', **ctx):
@@ -29,29 +29,23 @@ def _make_result(name, passed, description='* [ ] Test check.', **ctx):
 @mock.patch('charmhub_listing_review.ai_client.shutil.which', return_value=None)
 def test_ai_not_available_no_cli(mock_which):
     """AI is unavailable when the Copilot CLI is not found."""
-    import charmhub_listing_review.ai_client as ai_client
-
     ai_client._copilot_available = None  # Reset cache.
-    assert is_ai_available() is False
+    assert ai_client.is_ai_available() is False
     ai_client._copilot_available = None  # Clean up.
 
 
 @mock.patch('charmhub_listing_review.ai_client.shutil.which', return_value='/usr/bin/copilot')
 def test_ai_not_available_no_sdk(mock_which):
     """AI is unavailable when the SDK cannot be imported."""
-    import charmhub_listing_review.ai_client as ai_client
-
     ai_client._copilot_available = None  # Reset cache.
     with mock.patch.dict('sys.modules', {'copilot': None}):
         # Importing 'copilot' will raise ImportError when set to None.
-        assert is_ai_available() is False
+        assert ai_client.is_ai_available() is False
     ai_client._copilot_available = None  # Clean up.
 
 
 def test_explain_failures_populates_explanations():
     """explain_failures sends prompts for failed checks and populates ai_explanation."""
-    from charmhub_listing_review.ai_client import explain_failures
-
     results = [
         _make_result('check_a', passed=True),
         _make_result('check_b', passed=False, url='https://example.com'),
@@ -78,7 +72,7 @@ def test_explain_failures_populates_explanations():
             return_value='Fix by doing X.',
         ),
     ):
-        updated = asyncio.run(explain_failures(results))
+        updated = asyncio.run(ai_client.explain_failures(results))
 
     # Only failed checks get explanations.
     assert updated[0].ai_explanation == ''  # passed=True
@@ -89,8 +83,6 @@ def test_explain_failures_populates_explanations():
 
 def test_explain_failures_no_failures_skips_ai():
     """explain_failures returns results unchanged when nothing failed."""
-    from charmhub_listing_review.ai_client import explain_failures
-
     results = [
         _make_result('check_a', passed=True),
         _make_result('check_b', passed=None),
@@ -100,29 +92,34 @@ def test_explain_failures_no_failures_skips_ai():
     with mock.patch(
         'charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock
     ) as mock_start:
-        updated = asyncio.run(explain_failures(results))
+        updated = asyncio.run(ai_client.explain_failures(results))
 
     mock_start.assert_not_called()
     assert updated is results
 
 
 def test_format_checklist_with_ai_explanations():
-    from charmhub_listing_review.self_review import format_checklist_for_console
-
     checklist = '* [o] The charm provides a license statement.'
     explanations = {
-        '* [ ] The charm provides a license statement.': 'Your LICENSE file was not recognized.',
+        '* [ ] The charm provides a license statement.': 'Your LICENSE file was not recognised.',
     }
     output = format_checklist_for_console(checklist, ai_explanations=explanations)
-    assert 'Your LICENSE file was not recognized.' in output
-    assert '❌' in output
+    assert 'Your LICENSE file was not recognised.' in output
+    assert '\u274c' in output
 
 
 def test_format_checklist_without_ai_explanations():
-    from charmhub_listing_review.self_review import format_checklist_for_console
-
     checklist = '* [o] The charm provides a license statement.'
     output = format_checklist_for_console(checklist)
-    assert '❌' in output
+    assert '\u274c' in output
     # No AI text should appear.
     assert 'AI' not in output
+
+
+def test_sanitise_ai_output():
+    """_sanitise_ai_output collapses lines and escapes markdown."""
+    result = ai_client._sanitise_ai_output('Line one.\nLine two with *bold* and _italic_.')
+    assert '\n' not in result
+    assert r'\*' in result
+    assert r'\_' in result
+    assert 'Line one. Line two' in result
