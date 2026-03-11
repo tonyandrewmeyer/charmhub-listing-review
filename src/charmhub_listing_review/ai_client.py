@@ -40,7 +40,13 @@ def is_ai_available() -> bool:
 
 
 def _check_ai_available() -> bool:
-    """Perform the actual availability check."""
+    """Perform the actual availability check.
+
+    Both the ``github-copilot-sdk`` Python package *and* the ``copilot`` CLI
+    tool must be present. The SDK communicates with the CLI over JSON-RPC —
+    the CLI handles authentication and token management, while the SDK
+    provides the Python async API on top of it.
+    """
     try:
         import copilot  # noqa: F401
     except ImportError:
@@ -83,6 +89,8 @@ async def create_session(system_message: str, **kwargs):
     """
     client = _get_client()
     config = {
+        # gpt-4.1 is the recommended model for the Copilot SDK — it offers
+        # the best balance of quality and speed for code-related tasks.
         'model': 'gpt-4.1',
         'systemMessage': {'content': system_message},
         **kwargs,
@@ -107,8 +115,8 @@ async def send_prompt(session, prompt: str) -> str:
 
 
 def print_ai_unavailable_notice():
-    """Print a one-line notice that AI features are disabled."""
+    """Print a notice that AI features are disabled."""
     print(
         '\nNote: AI-powered features are disabled (Copilot SDK not available).'
-        '\n      Install with: pip install github-copilot-sdk'
+        '\n      Install with: uv sync --group ai'
     )

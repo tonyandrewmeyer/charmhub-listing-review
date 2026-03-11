@@ -90,9 +90,9 @@ end-to-end.
 
 ```
  X The charm provides a license statement.
-   AI: The LICENSE file was not recognized as a standard open-source license.
+   AI: The LICENSE file was not recognised as a standard open-source license.
    Ensure you are using an unmodified Apache 2.0, GPL 2/3, LGPL 3, or MPL 2.0
-   license text.
+   license text, or open a feature request to recognise other licenses.
 ```
 
 ---
@@ -100,14 +100,14 @@ end-to-end.
 ## Phase 2: AI-Powered Review Summary
 
 **Goal:** After all checks run, provide a human-readable summary with
-prioritized action items.
+prioritised action items.
 
 **Implementation:**
 
 - Add `async generate_summary(charm_name, results, charmcraft_data) -> str`
   to `ai_client.py`.
-- System prompt instructs the LLM to write 3-5 bullet points summarizing
-  readiness for public listing, prioritized by impact.
+- System prompt instructs the LLM to write 3-5 bullet points summarising
+  readiness for public listing, prioritised by impact.
 - Input includes: all CheckResult data, charmcraft.yaml metadata, and
   pass/fail/unknown counts.
 
@@ -173,7 +173,7 @@ AI Metadata Assessment
 ----------------------
 - Summary: Good. Clear and concise.
 - Description: Needs work. Too generic — consider mentioning specific
-  integrations (e.g., "integrates with PostgreSQL and S3").
+  integrations (for example, "integrates with PostgreSQL and S3").
 - Title: "My Charm" should be more descriptive.
 ```
 
@@ -186,7 +186,7 @@ AI Metadata Assessment
 
 ## Phase 4: Code Quality Analysis
 
-**Goal:** Analyze the charm's Python code for antipatterns, missing error
+**Goal:** Analyse the charm's Python code for antipatterns, missing error
 handling, and Juju/Ops framework misuse.
 
 **Implementation:**
@@ -195,8 +195,8 @@ handling, and Juju/Ops framework misuse.
   - `collect_charm_code(repo_dir) -> dict` — finds and reads the main charm
     class, files under `src/`, charm libraries under `lib/`. Truncates each
     file to ~3000 chars. Returns `{filepath: content}`.
-  - `async analyze_code(code_context) -> str` — sends code to Copilot with a
-    specialized system prompt covering:
+  - `async analyse_code(code_context) -> str` — sends code to Copilot with a
+    specialised system prompt covering:
     1. Common antipatterns (blocking in event handlers, hardcoded values)
     2. Missing error handling (uncaught exceptions in relation handlers)
     3. Ops framework misuse (incorrect status setting, missing `defer()`)
@@ -225,7 +225,7 @@ follow-up questions about failures and get guidance.
 
 - New module: `interactive.py`
   - Async REPL loop maintaining a Copilot session.
-  - Session initialized with: charm name, repository URL, all check results,
+  - Session initialised with: charm name, repository URL, all check results,
     and any AI assessments already generated.
   - Custom tools registered via `@define_tool`:
     - `run_check(check_name)` — re-runs a specific check.
@@ -253,7 +253,7 @@ $ self-review --charm-name foo --repository https://github.com/org/foo-operator 
 Interactive Review Assistant (type 'quit' to exit)
 
 > Why did the license check fail?
-The license file was found but its content hash didn't match any recognized
+The license file was found but its content hash didn't match any recognised
 license. Your LICENSE file may have been modified from the standard text.
 
 > Can you check if my README has usage examples?
@@ -263,6 +263,27 @@ the charm with `juju deploy`.
 
 > quit
 ```
+
+---
+
+## Phase 6: Canonical Inference Snap Backend (Investigation)
+
+**Goal:** Investigate whether any of the Canonical inference snaps (which
+expose an OpenAI-compatible API) can be used as an alternative backend to
+GitHub Copilot for some or all of the AI features.
+
+**Implementation:**
+
+- Research which Canonical inference snaps are available and what models they
+  provide.
+- Create a backend abstraction (or wrapper) so that the existing Copilot
+  integration and the snap-based backend can be used interchangeably.
+- Add a CLI option (for example, `--ai-backend copilot|snap`) to let the user
+  choose which backend to use.
+- The snap backend would use the OpenAI-compatible API exposed by the snap,
+  wrapped to match the same interface used by the Copilot SDK integration.
+- Evaluate whether all phases (1-5) work acceptably with the snap models or
+  whether some features should be Copilot-only.
 
 ---
 
@@ -278,7 +299,7 @@ evaluate() → list[CheckResult]          (deterministic, always runs)
   ├──► generate_summary()               (Phase 2)
   ├──► assess_documentation()           (Phase 3a)
   ├──► assess_metadata()                (Phase 3b)
-  ├──► analyze_code()                   (Phase 4, opt-in)
+  ├──► analyse_code()                   (Phase 4, opt-in)
   │
   ▼
 self_review.py / update_issue.py        (renders all results)
