@@ -29,6 +29,7 @@ created issue to be user-friendly, and to include the current checklist.
 """
 
 import argparse
+import asyncio
 import json
 import pathlib
 import random
@@ -40,6 +41,7 @@ from typing import TypedDict, cast
 
 import yaml
 
+from .ai_client import explain_failures, is_ai_available
 from .evaluate import evaluate
 from .sphinx_refs import convert_sphinx_refs
 
@@ -320,8 +322,6 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
     If the Copilot SDK is available, also adds AI-generated explanations
     as sub-bullets under failed checklist items.
     """
-    from .ai_client import explain_failures, is_ai_available
-
     results = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
@@ -332,9 +332,10 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
     )
 
     if is_ai_available():
-        import asyncio
-
-        results = asyncio.run(explain_failures(results))
+        try:
+            results = asyncio.run(explain_failures(results))
+        except Exception:  # noqa: S110
+            pass  # AI explanations are optional; ignore errors and use original results.
 
     for result in results:
         # Convert Sphinx refs in the description to match the converted comment.

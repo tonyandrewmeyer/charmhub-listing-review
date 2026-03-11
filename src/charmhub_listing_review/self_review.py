@@ -36,6 +36,7 @@ import textwrap
 
 from .ai_client import explain_failures, is_ai_available
 from .evaluate import CheckResult, evaluate
+from .sphinx_refs import convert_sphinx_refs
 from .update_issue import issue_comment
 
 
@@ -137,22 +138,15 @@ def print_self_review_results(
                 if not result.description:
                     continue
 
-                unchecked_version = result.description.replace('* [x]', '* [ ]')
+                description = convert_sphinx_refs(result.description)
+                unchecked_version = description.replace('* [x]', '* [ ]')
                 if unchecked_version in comment:
                     if result.passed:
-                        comment = comment.replace(unchecked_version, result.description)
+                        comment = comment.replace(unchecked_version, description)
                     elif result.passed is False:
                         failed_version = unchecked_version.replace('* [ ]', '* [o]')
                         comment = comment.replace(unchecked_version, failed_version)
                     # passed is None means indeterminate, leave as '* [ ]' (unknown)
-
-            # Run AI explanations for failed checks.
-            if is_ai_available():
-                results = asyncio.run(explain_failures(results))
-                for result in results:
-                    if result.ai_explanation:
-                        unchecked_key = result.description.replace('* [x]', '* [ ]')
-                        ai_explanations[unchecked_key] = result.ai_explanation
 
         except Exception as e:
             print('\n⚠️  Warning: Could not run automated checks on repository.')
@@ -166,6 +160,18 @@ def print_self_review_results(
                 print('   Could not clone the repository.')
             else:
                 print(f'   Error details: {e}')
+
+        # Run AI explanations for failed checks (best-effort, separate from evaluate).
+        if results and is_ai_available():
+            try:
+                results = asyncio.run(explain_failures(results))
+                for result in results:
+                    if result.ai_explanation:
+                        description = convert_sphinx_refs(result.description)
+                        unchecked_key = description.replace('* [x]', '* [ ]')
+                        ai_explanations[unchecked_key] = result.ai_explanation
+            except Exception:  # noqa: S110
+                pass  # AI explanations are best-effort; don't disrupt the output.
 
     formatted_checklist = format_checklist_for_console(comment, ai_explanations)
     print(formatted_checklist)
