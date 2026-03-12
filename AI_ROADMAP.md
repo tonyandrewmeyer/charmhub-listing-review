@@ -14,9 +14,10 @@ Owns all Copilot SDK interaction and provides graceful degradation.
 
 - `is_ai_available() -> bool` — checks if the SDK is importable and the
   Copilot CLI is reachable. Result is cached.
-- `get_session(system_message: str) -> CopilotSession` — creates a Copilot
-  client and session with the given system prompt (model: `gpt-4.1`). Caches
-  the client instance.
+- `start_client()` / `stop_client()` — manage a cached Copilot client
+  instance, starting it once for the process and shutting it down cleanly.
+- `create_session(system_message: str) -> CopilotSession` — uses the cached
+  client to create a session with the given system prompt (model: `gpt-4.1`).
 - `async send_prompt(session, prompt: str) -> str` — wraps `send_and_wait`,
   returns the text response.
 - When AI is unavailable, a single info line is printed:
@@ -46,7 +47,6 @@ class CheckResult:
     passed: bool | None    # True=pass, False=fail, None=indeterminate
     description: str       # the markdown checklist line
     context: dict          # extra data for AI (e.g. {"url": "...", "status_code": 404})
-    ai_explanation: str = ""  # filled in by AI layer
 ```
 
 No backward compatibility is needed in the code — all consumers

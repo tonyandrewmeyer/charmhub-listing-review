@@ -137,7 +137,7 @@ def contribution_guidelines(contribution_url: str) -> CheckResult:
     except requests.RequestException as e:
         context['error'] = str(e)
         return CheckResult(
-            name='contribution_guidelines', passed=False, description=description, context=context
+            name='contribution_guidelines', passed=None, description=description, context=context
         )
 
 
@@ -174,13 +174,16 @@ def license_statement(license_url: str) -> CheckResult:
                 )
             context['known_license'] = False
             # If it's another license, then let the reviewer decide if it's a license file.
+            return CheckResult(
+                name='license_statement', passed=None, description=description, context=context
+            )
         return CheckResult(
             name='license_statement', passed=False, description=description, context=context
         )
     except requests.RequestException as e:
         context['error'] = str(e)
         return CheckResult(
-            name='license_statement', passed=False, description=description, context=context
+            name='license_statement', passed=None, description=description, context=context
         )
 
 
@@ -210,7 +213,7 @@ def security_doc(security_url: str) -> CheckResult:
     except requests.RequestException as e:
         context['error'] = str(e)
         return CheckResult(
-            name='security_doc', passed=False, description=description, context=context
+            name='security_doc', passed=None, description=description, context=context
         )
 
 
@@ -700,7 +703,7 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> CheckResult:
     ).strip()
     context: dict[str, Any] = {}
     lock_files = ['poetry.lock', 'uv.lock']
-    if not repo_dir / 'pyproject.toml':
+    if not (repo_dir / 'pyproject.toml').is_file():
         context['error'] = 'pyproject.toml not found'
         return CheckResult(
             name='repo_has_lock_file', passed=False, description=description, context=context
