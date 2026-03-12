@@ -19,6 +19,7 @@ import pathlib
 from unittest import mock
 
 import charmhub_listing_review.update_issue as update_issue
+from charmhub_listing_review.evaluate import CheckResult
 
 
 @mock.patch('random.choice')
@@ -202,8 +203,6 @@ def _make_issue_data(**overrides):
 
 def test_apply_automated_checks_ticks_passed():
     """apply_automated_checks replaces unchecked items with checked for passing results."""
-    from charmhub_listing_review.evaluate import CheckResult
-
     result = CheckResult(
         name='license',
         passed=True,
@@ -221,8 +220,6 @@ def test_apply_automated_checks_ticks_passed():
 
 def test_apply_automated_checks_ai_explanation():
     """apply_automated_checks adds AI explanation sub-bullets for failed checks."""
-    from charmhub_listing_review.evaluate import CheckResult
-
     result = CheckResult(
         name='license',
         passed=False,
@@ -237,12 +234,11 @@ def test_apply_automated_checks_ai_explanation():
     ):
         output = update_issue.apply_automated_checks(_make_issue_data(), comment)
     assert '_AI: The LICENSE file was not recognised._' in output
+    assert 'AI output is a suggestion only' in output
 
 
 def test_apply_automated_checks_ai_disabled():
     """apply_automated_checks does not call explain_failures when AI is unavailable."""
-    from charmhub_listing_review.evaluate import CheckResult
-
     result = CheckResult(
         name='license',
         passed=False,
@@ -261,8 +257,6 @@ def test_apply_automated_checks_ai_disabled():
 
 def test_apply_automated_checks_ai_error_is_graceful():
     """apply_automated_checks still succeeds when explain_failures raises."""
-    from charmhub_listing_review.evaluate import CheckResult
-
     result = CheckResult(
         name='license',
         passed=False,
