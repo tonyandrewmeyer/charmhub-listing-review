@@ -337,6 +337,7 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         except Exception:  # noqa: S110
             pass  # AI explanations are optional; ignore errors and use original results.
 
+    ai_explanations_added = False
     for result in results:
         # Convert Sphinx refs in the description to match the converted comment.
         description = convert_sphinx_refs(result.description)
@@ -345,7 +346,15 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
             replacement = description
             if result.ai_explanation and result.passed is False:
                 replacement += f'\n  * _AI: {result.ai_explanation}_'
+                ai_explanations_added = True
             comment = comment.replace(unchecked, replacement)
+
+    if ai_explanations_added:
+        comment += (
+            '\n\n> [!WARNING]\n'
+            '> AI output is a suggestion only. '
+            'AI makes mistakes — please check the AI responses carefully before acting on them.'
+        )
     return comment
 
 

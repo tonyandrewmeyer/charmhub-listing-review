@@ -176,6 +176,12 @@ def print_self_review_results(
     formatted_checklist = format_checklist_for_console(comment, ai_explanations)
     print(formatted_checklist)
 
+    if ai_explanations:
+        print(
+            '\n\033[33m⚠️  AI output is a suggestion only. '
+            'AI makes mistakes — please check the AI responses carefully before acting on them.\033[0m'
+        )
+
     completed_count = comment.count('* [x]')
     failed_count = comment.count('* [o]')
     unknown_count = comment.count('* [ ]')
