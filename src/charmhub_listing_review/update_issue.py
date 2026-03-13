@@ -41,7 +41,12 @@ from typing import TypedDict, cast
 
 import yaml
 
-from .ai_client import explain_and_summarise, is_ai_available
+from .ai_client import (
+    assess_documentation,
+    assess_metadata,
+    explain_and_summarise,
+    is_ai_available,
+)
 from .evaluate import evaluate
 from .sphinx_refs import convert_sphinx_refs
 
@@ -322,7 +327,7 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
     If the Copilot SDK is available, also adds AI-generated explanations
     as sub-bullets under failed checklist items, and prepends an AI summary.
     """
-    results = evaluate(
+    evaluation = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
         issue_data['ci_linting'],
@@ -330,13 +335,26 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['license_link'],
         issue_data['security_link'],
     )
+    results = evaluation.checks
 
     ai_summary = ''
+    ai_doc_assessment = ''
+    ai_meta_assessment = ''
     if is_ai_available():
         try:
             results, ai_summary = asyncio.run(explain_and_summarise(issue_data['name'], results))
         except Exception:  # noqa: S110
             pass  # AI features are best-effort.
+        if evaluation.doc_context:
+            try:
+                ai_doc_assessment = asyncio.run(assess_documentation(evaluation.doc_context))
+            except Exception:  # noqa: S110
+                pass
+        if evaluation.charmcraft_data:
+            try:
+                ai_meta_assessment = asyncio.run(assess_metadata(evaluation.charmcraft_data))
+            except Exception:  # noqa: S110
+                pass
 
     ai_explanations_added = False
     for result in results:
@@ -357,11 +375,26 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
             'AI makes mistakes — please check the AI responses carefully before acting on them.'
         )
 
+    ai_blocks = []
     if ai_summary:
-        summary_block = (
-            f'<details>\n<summary>AI Review Summary</summary>\n\n{ai_summary}\n\n</details>\n\n'
+        ai_blocks.append(
+            f'<details>\n<summary>AI Review Summary</summary>\n\n{ai_summary}\n\n</details>'
         )
-        comment = summary_block + comment
+    if ai_doc_assessment:
+        ai_blocks.append(
+            '<details>\n<summary>AI Documentation Assessment</summary>\n\n'
+            f'{ai_doc_assessment}\n\n'
+            '</details>'
+        )
+    if ai_meta_assessment:
+        ai_blocks.append(
+            '<details>\n<summary>AI Metadata Assessment</summary>\n\n'
+            f'{ai_meta_assessment}\n\n'
+            '</details>'
+        )
+    if ai_blocks:
+        comment = '\n\n'.join(ai_blocks) + '\n\n' + comment
+
     return comment
 
 

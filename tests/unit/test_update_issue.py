@@ -19,7 +19,7 @@ import pathlib
 from unittest import mock
 
 import charmhub_listing_review.update_issue as update_issue
-from charmhub_listing_review.evaluate import CheckResult
+from charmhub_listing_review.evaluate import CheckResult, EvaluationResult
 
 
 @mock.patch('random.choice')
@@ -201,6 +201,11 @@ def _make_issue_data(**overrides):
     return defaults
 
 
+def _make_evaluation(checks):
+    """Create a mock EvaluationResult with the given checks."""
+    return EvaluationResult(checks=checks)
+
+
 def test_apply_automated_checks_ticks_passed():
     """apply_automated_checks replaces unchecked items with checked for passing results."""
     result = CheckResult(
@@ -211,7 +216,10 @@ def test_apply_automated_checks_ticks_passed():
     )
     comment = '* [ ] The charm provides a license statement.'
     with (
-        mock.patch('charmhub_listing_review.update_issue.evaluate', return_value=[result]),
+        mock.patch(
+            'charmhub_listing_review.update_issue.evaluate',
+            return_value=_make_evaluation([result]),
+        ),
         mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=False),
     ):
         output = update_issue.apply_automated_checks(_make_issue_data(), comment)
@@ -229,7 +237,10 @@ def test_apply_automated_checks_ai_explanation():
     )
     comment = '* [ ] The charm provides a license statement.'
     with (
-        mock.patch('charmhub_listing_review.update_issue.evaluate', return_value=[result]),
+        mock.patch(
+            'charmhub_listing_review.update_issue.evaluate',
+            return_value=_make_evaluation([result]),
+        ),
         mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=False),
     ):
         output = update_issue.apply_automated_checks(_make_issue_data(), comment)
@@ -247,7 +258,10 @@ def test_apply_automated_checks_ai_disabled():
     )
     comment = '* [ ] The charm provides a license statement.'
     with (
-        mock.patch('charmhub_listing_review.update_issue.evaluate', return_value=[result]),
+        mock.patch(
+            'charmhub_listing_review.update_issue.evaluate',
+            return_value=_make_evaluation([result]),
+        ),
         mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=False),
         mock.patch('charmhub_listing_review.update_issue.explain_and_summarise') as mock_ai,
     ):
@@ -264,11 +278,15 @@ def test_apply_automated_checks_ai_error_is_graceful():
         context={},
     )
     comment = '* [ ] The charm provides a license statement.'
+
     with (
-        mock.patch('charmhub_listing_review.update_issue.evaluate', return_value=[result]),
+        mock.patch(
+            'charmhub_listing_review.update_issue.evaluate',
+            return_value=_make_evaluation([result]),
+        ),
         mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=True),
         mock.patch(
-            'charmhub_listing_review.update_issue.asyncio.run',
+            'charmhub_listing_review.update_issue.explain_and_summarise',
             side_effect=RuntimeError('Copilot auth failed'),
         ),
     ):

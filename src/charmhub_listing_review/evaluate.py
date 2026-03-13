@@ -58,6 +58,20 @@ class CheckResult:
     """AI-generated explanation for failed checks, populated by ai_client."""
 
 
+@dataclasses.dataclass
+class EvaluationResult:
+    """Complete evaluation result including check results and repo context."""
+
+    checks: list[CheckResult]
+    """The individual check results."""
+
+    charmcraft_data: dict[str, Any] | None = None
+    """Parsed charmcraft.yaml data, if available."""
+
+    doc_context: dict[str, Any] = dataclasses.field(default_factory=dict)
+    """Documentation context for AI quality assessment."""
+
+
 def evaluate(
     charm_name: str,
     repository_url: str,
@@ -65,12 +79,11 @@ def evaluate(
     contribution_url: str,
     license_url: str,
     security_url: str,
-) -> list[CheckResult]:
+) -> EvaluationResult:
     """Evaluate the charm for listing on Charmhub.
 
-    Returns a list of CheckResult objects representing the outcome of each
-    automated check. Each result includes the markdown checklist line (ticked
-    if the check passed) and structured context data for AI analysis.
+    Returns an EvaluationResult containing CheckResult objects for each
+    automated check, plus repo context data for AI analysis.
     """
     results: list[CheckResult] = []
     repo_dir = _clone_repo(repository_url)
@@ -91,9 +104,16 @@ def evaluate(
         results.append(repo_has_lock_file(repo_dir))
         results.append(charm_has_icon(repo_dir))
         results.append(charm_lib_docs(repo_dir))
+
+        charmcraft_data = _get_charmcraft_yaml(repo_dir)
+        doc_context = _gather_doc_context(repo_dir, charmcraft_data)
     finally:
         shutil.rmtree(str(repo_dir), ignore_errors=True)
-    return results
+    return EvaluationResult(
+        checks=results,
+        charmcraft_data=charmcraft_data,
+        doc_context=doc_context,
+    )
 
 
 def coding_conventions(linting_url: str) -> CheckResult:
@@ -242,6 +262,38 @@ def _get_charmcraft_yaml(repo_dir: pathlib.Path) -> dict[Any, Any] | None:
             return yaml.safe_load(f)
     except (yaml.YAMLError, OSError):
         return None
+
+
+_MAX_DOC_CONTENT_LENGTH = 4000
+
+
+def _gather_doc_context(
+    repo_dir: pathlib.Path,
+    charmcraft_data: dict[Any, Any] | None,
+) -> dict[str, Any]:
+    """Gather documentation context from the repo for AI quality assessment."""
+    context: dict[str, Any] = {}
+
+    readme_path = repo_dir / 'README.md'
+    if readme_path.is_file():
+        try:
+            content = readme_path.read_text(encoding='utf-8')
+            context['readme_content'] = content[:_MAX_DOC_CONTENT_LENGTH]
+        except OSError:
+            pass
+
+    docs_dir = repo_dir / 'docs'
+    if docs_dir.is_dir():
+        doc_files = [str(p.relative_to(repo_dir)) for p in docs_dir.rglob('*.md')]
+        context['doc_files'] = doc_files[:50]  # Cap the list.
+
+    if charmcraft_data:
+        links = charmcraft_data.get('links', {})
+        doc_url = links.get('documentation', '')
+        if doc_url:
+            context['documentation_url'] = doc_url
+
+    return context
 
 
 def metadata_links(repo_dir: pathlib.Path) -> CheckResult:

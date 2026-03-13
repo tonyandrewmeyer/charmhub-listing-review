@@ -34,7 +34,12 @@ import asyncio
 import sys
 import textwrap
 
-from .ai_client import explain_and_summarise, is_ai_available
+from .ai_client import (
+    assess_documentation,
+    assess_metadata,
+    explain_and_summarise,
+    is_ai_available,
+)
 from .evaluate import CheckResult, evaluate
 from .sphinx_refs import convert_sphinx_refs
 from .update_issue import issue_comment
@@ -116,6 +121,8 @@ def print_self_review_results(
     comment = comment.replace('are also\nrequired for listing.', 'are also required for listing.')
 
     results: list[CheckResult] = []
+    charmcraft_data: dict | None = None
+    doc_context: dict = {}
     ai_explanations: dict[str, str] = {}
 
     if project_repo:
@@ -125,7 +132,7 @@ def print_self_review_results(
         security_url = f'{project_repo}/blob/main/SECURITY.md'
 
         try:
-            results = evaluate(
+            evaluation = evaluate(
                 charm_name,
                 project_repo,
                 ci_linting or '',
@@ -133,6 +140,9 @@ def print_self_review_results(
                 license_url,
                 security_url,
             )
+            results = evaluation.checks
+            charmcraft_data = evaluation.charmcraft_data
+            doc_context = evaluation.doc_context
 
             for result in results:
                 if not result.description:
@@ -193,12 +203,31 @@ def print_self_review_results(
         f'{unknown_count} manual review needed\033[0m'
     )
 
-    # Print AI review summary if generated.
+    # Print AI-driven outputs when available.
     if results and is_ai_available() and ai_summary:
         print('\n\033[1m🤖 AI Review Summary\033[0m')
         print('-' * 40)
         print(ai_summary)
 
+    if is_ai_available() and doc_context:
+        try:
+            doc_assessment = asyncio.run(assess_documentation(doc_context))
+            if doc_assessment:
+                print('\n\033[1m📄 AI Documentation Assessment\033[0m')
+                print('-' * 40)
+                print(doc_assessment)
+        except Exception:  # noqa: S110
+            pass
+
+    if is_ai_available() and charmcraft_data:
+        try:
+            meta_assessment = asyncio.run(assess_metadata(charmcraft_data))
+            if meta_assessment:
+                print('\n\033[1m📝 AI Metadata Assessment\033[0m')
+                print('-' * 40)
+                print(meta_assessment)
+        except Exception:  # noqa: S110
+            pass
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')
     print('\n📋 To submit your charm for official review, create an issue at:')
