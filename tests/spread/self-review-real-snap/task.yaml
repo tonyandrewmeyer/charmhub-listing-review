@@ -9,13 +9,17 @@ execute: |
   snap install gemma3 --beta
   gemma3 status
 
-  # Wait for the inference API to become ready (may take a few minutes on
-  # first launch while the model loads).
+  # Wait for the inference API to become ready (the model is large and may
+  # take 5-10 minutes to load on a standard CI runner without a GPU).
   echo "Waiting for gemma3 API to become ready..."
-  for i in $(seq 1 120); do
+  for i in $(seq 1 300); do
     if curl -sf http://127.0.0.1:8326/v3/models >/dev/null 2>&1; then
-      echo "API ready after ~${i}s"
+      echo "API ready after ~$((i * 2))s"
       break
+    fi
+    if [ $((i % 30)) -eq 0 ]; then
+      echo "Still waiting after ~$((i * 2))s..."
+      gemma3 status || true
     fi
     sleep 2
   done
