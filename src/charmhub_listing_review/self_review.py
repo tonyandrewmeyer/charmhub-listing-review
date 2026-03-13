@@ -109,21 +109,19 @@ def print_self_review_results(
                 security_url,
             )
 
-            automated_checks = set()
             for result in results:
-                if not result:
+                if not result.description:
                     continue
 
-                unchecked_version = result.replace('* [x]', '* [ ]')
-                automated_checks.add(unchecked_version)
+                unchecked_version = result.description.replace('* [x]', '* [ ]')
                 if unchecked_version in comment:
-                    if result.startswith('* [x]'):
-                        comment = comment.replace(unchecked_version, result)
-                    else:
+                    if result.passed:
+                        comment = comment.replace(unchecked_version, result.description)
+                    elif result.passed is False:
                         failed_version = unchecked_version.replace('* [ ]', '* [o]')
                         comment = comment.replace(unchecked_version, failed_version)
+                    # passed is None means indeterminate, leave as '* [ ]' (unknown)
 
-            # For checks that weren't automated, we already leave them as '* [ ]' (unknown)
         except Exception as e:
             print('\n⚠️  Warning: Could not run automated checks on repository.')
             print(

@@ -332,10 +332,11 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['security_link'],
     )
     for result in results:
-        # Convert Sphinx refs in the result to match the converted comment.
-        result = convert_sphinx_refs(result)
-        if result.replace('* [x]', '* [ ]') in comment:
-            comment = comment.replace(result.replace('* [x]', '* [ ]'), result)
+        # Convert Sphinx refs in the description to match the converted comment.
+        description = convert_sphinx_refs(result.description)
+        unchecked = description.replace('* [x]', '* [ ]')
+        if unchecked in comment:
+            comment = comment.replace(unchecked, description)
     return comment
 
 
