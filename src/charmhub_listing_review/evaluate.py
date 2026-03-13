@@ -23,7 +23,6 @@ for the reviewer, and is also a way for charm publishers to check their charm
 against the listing requirements before submitting a listing request.
 """
 
-import dataclasses
 import hashlib
 import pathlib
 import re
@@ -37,39 +36,8 @@ from typing import Any
 import requests
 import yaml
 
-
-@dataclasses.dataclass
-class CheckResult:
-    """Result of a single automated check."""
-
-    name: str
-    """Identifier for the check, e.g. 'license_statement'."""
-
-    passed: bool | None
-    """True=pass, False=fail, None=could not be determined automatically."""
-
-    description: str
-    """The markdown checklist line, e.g. '* [x] The charm has an icon.'"""
-
-    context: dict[str, Any] = dataclasses.field(default_factory=dict)
-    """Extra data for AI analysis (e.g. {"url": "...", "status_code": 404})."""
-
-    ai_explanation: str = ''
-    """AI-generated explanation for failed checks, populated by ai_client."""
-
-
-@dataclasses.dataclass
-class EvaluationResult:
-    """Complete evaluation result including check results and repo context."""
-
-    checks: list[CheckResult]
-    """The individual check results."""
-
-    charmcraft_data: dict[str, Any] | None = None
-    """Parsed charmcraft.yaml data, if available."""
-
-    doc_context: dict[str, Any] = dataclasses.field(default_factory=dict)
-    """Documentation context for AI quality assessment."""
+from ._models import CheckResult, EvaluationResult
+from .ai_code_review import collect_code_context
 
 
 def evaluate(
@@ -79,6 +47,7 @@ def evaluate(
     contribution_url: str,
     license_url: str,
     security_url: str,
+    collect_code: bool = False,
 ) -> EvaluationResult:
     """Evaluate the charm for listing on Charmhub.
 
@@ -107,12 +76,15 @@ def evaluate(
 
         charmcraft_data = _get_charmcraft_yaml(repo_dir)
         doc_context = _gather_doc_context(repo_dir, charmcraft_data)
+
+        code_context = collect_code_context(repo_dir) if collect_code else {}
     finally:
         shutil.rmtree(str(repo_dir), ignore_errors=True)
     return EvaluationResult(
         checks=results,
         charmcraft_data=charmcraft_data,
         doc_context=doc_context,
+        code_context=code_context,
     )
 
 

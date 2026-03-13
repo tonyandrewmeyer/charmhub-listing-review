@@ -19,6 +19,7 @@ from unittest import mock
 
 import charmhub_listing_review.ai_client as ai_client
 from charmhub_listing_review.ai_client import assess_documentation, assess_metadata
+from charmhub_listing_review.ai_code_review import analyse_code, collect_charm_code
 from charmhub_listing_review.evaluate import CheckResult, _gather_doc_context
 from charmhub_listing_review.self_review import format_checklist_for_console
 
@@ -284,6 +285,53 @@ def test_gather_doc_context_no_docs(tmp_path):
     ctx = _gather_doc_context(tmp_path, None)
     assert 'readme_content' not in ctx
     assert 'doc_files' not in ctx
+
+
+def test_collect_charm_code(tmp_path):
+    src_dir = tmp_path / 'src'
+    src_dir.mkdir()
+    (src_dir / 'charm.py').write_text('class MyCharm: pass')
+    (src_dir / 'helpers.py').write_text('def helper(): pass')
+
+    code = collect_charm_code(tmp_path)
+    assert 'src/charm.py' in code
+    assert 'src/helpers.py' in code
+    assert 'class MyCharm' in code['src/charm.py']
+
+
+def test_collect_charm_code_empty(tmp_path):
+    code = collect_charm_code(tmp_path)
+    assert code == {}
+
+
+def test_analyse_code():
+    code_context = {'src/charm.py': 'class MyCharm: pass'}
+
+    with (
+        mock.patch(
+            'charmhub_listing_review.ai_code_review.start_client', new_callable=mock.AsyncMock
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_code_review.stop_client', new_callable=mock.AsyncMock
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_code_review.create_session',
+            new_callable=mock.AsyncMock,
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_code_review.send_prompt',
+            new_callable=mock.AsyncMock,
+            return_value='- warning: Missing status updates.',
+        ),
+    ):
+        result = asyncio.run(analyse_code(code_context))
+
+    assert 'Missing status' in result
+
+
+def test_analyse_code_empty():
+    result = asyncio.run(analyse_code({}))
+    assert result == ''
 
 
 def test_generate_summary_with_metadata():

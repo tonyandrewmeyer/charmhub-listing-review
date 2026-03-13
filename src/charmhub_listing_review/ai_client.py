@@ -27,7 +27,7 @@ import json
 import re
 import shutil
 
-from .evaluate import CheckResult
+from ._models import CheckResult
 
 # Timeout for individual LLM calls, in seconds.
 _LLM_TIMEOUT_SECONDS = 30
@@ -455,7 +455,7 @@ async def assess_metadata(charmcraft_data: dict) -> str:
 
     prompt = (
         f'Assess the quality of these charmcraft.yaml text fields:\n\n'
-        f'{fields_text}\n'
+        f'<metadata-fields>\n{fields_text}</metadata-fields>\n\n'
         f'Evaluate each field and suggest improvements where needed.'
     )
 

@@ -47,6 +47,7 @@ from .ai_client import (
     explain_and_summarise,
     is_ai_available,
 )
+from .ai_code_review import analyse_code
 from .evaluate import evaluate
 from .sphinx_refs import convert_sphinx_refs
 
@@ -334,12 +335,14 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['contribution_link'],
         issue_data['license_link'],
         issue_data['security_link'],
+        collect_code=is_ai_available(),
     )
     results = evaluation.checks
 
     ai_summary = ''
     ai_doc_assessment = ''
     ai_meta_assessment = ''
+    ai_code_analysis = ''
     if is_ai_available():
         try:
             results, ai_summary = asyncio.run(explain_and_summarise(issue_data['name'], results))
@@ -353,6 +356,11 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         if evaluation.charmcraft_data:
             try:
                 ai_meta_assessment = asyncio.run(assess_metadata(evaluation.charmcraft_data))
+            except Exception:  # noqa: S110
+                pass
+        if evaluation.code_context.get('code_files'):
+            try:
+                ai_code_analysis = asyncio.run(analyse_code(evaluation.code_context['code_files']))
             except Exception:  # noqa: S110
                 pass
 
@@ -390,6 +398,12 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         ai_blocks.append(
             '<details>\n<summary>AI Metadata Assessment</summary>\n\n'
             f'{ai_meta_assessment}\n\n'
+            '</details>'
+        )
+    if ai_code_analysis:
+        ai_blocks.append(
+            '<details>\n<summary>AI Code Quality Analysis</summary>\n\n'
+            f'{ai_code_analysis}\n\n'
             '</details>'
         )
     if ai_blocks:

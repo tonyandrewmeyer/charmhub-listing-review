@@ -57,6 +57,7 @@ pre-commit install
 - Conventional commit messages (feat, fix, docs, ci, chore, etc.)
 - New files need Apache 2.0 copyright header with current year
 - Always UK English, *not* US English
+- Imports belong at the top of a module. Import modules not smaller objects, other than for type annotations.
 
 ## Pull Request Guidelines
 
