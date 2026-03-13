@@ -54,6 +54,9 @@ class CheckResult:
     context: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Extra data for AI analysis (e.g. {"url": "...", "status_code": 404})."""
 
+    ai_explanation: str = ''
+    """AI-generated explanation for failed checks, populated by ai_client."""
+
 
 def evaluate(
     charm_name: str,

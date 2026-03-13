@@ -29,6 +29,7 @@ created issue to be user-friendly, and to include the current checklist.
 """
 
 import argparse
+import asyncio
 import json
 import pathlib
 import random
@@ -40,6 +41,7 @@ from typing import TypedDict, cast
 
 import yaml
 
+from .ai_client import explain_failures, is_ai_available
 from .evaluate import evaluate
 from .sphinx_refs import convert_sphinx_refs
 
@@ -315,7 +317,11 @@ review within the next three working days.
 
 
 def apply_automated_checks(issue_data: _IssueData, comment: str):
-    """Adjust the comment to tick items based on automated checks."""
+    """Adjust the comment to tick items based on automated checks.
+
+    If the Copilot SDK is available, also adds AI-generated explanations
+    as sub-bullets under failed checklist items.
+    """
     results = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
@@ -324,12 +330,31 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['license_link'],
         issue_data['security_link'],
     )
+
+    if is_ai_available():
+        try:
+            results = asyncio.run(explain_failures(results))
+        except Exception:  # noqa: S110
+            pass  # AI explanations are optional; ignore errors and use original results.
+
+    ai_explanations_added = False
     for result in results:
         # Convert Sphinx refs in the description to match the converted comment.
         description = convert_sphinx_refs(result.description)
         unchecked = description.replace('* [x]', '* [ ]')
         if unchecked in comment:
-            comment = comment.replace(unchecked, description)
+            replacement = description
+            if result.ai_explanation and result.passed is False:
+                replacement += f'\n  * _AI: {result.ai_explanation}_'
+                ai_explanations_added = True
+            comment = comment.replace(unchecked, replacement)
+
+    if ai_explanations_added:
+        comment += (
+            '\n\n> [!WARNING]\n'
+            '> AI output is a suggestion only. '
+            'AI makes mistakes — please check the AI responses carefully before acting on them.'
+        )
     return comment
 
 
