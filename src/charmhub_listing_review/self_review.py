@@ -41,7 +41,8 @@ from .ai_client import (
     is_ai_available,
 )
 from .ai_code_review import analyse_code
-from .evaluate import CheckResult, evaluate
+from .evaluate import CheckResult, EvaluationResult, evaluate
+from .interactive import run_interactive
 from .sphinx_refs import convert_sphinx_refs
 from .update_issue import issue_comment
 
@@ -92,8 +93,12 @@ def print_self_review_results(
     project_repo: str = '',
     ci_linting: str = '',
     code_review: bool = False,
-):
-    """Print the self-review results to console."""
+) -> EvaluationResult | None:
+    """Print the self-review results to console.
+
+    Returns the EvaluationResult if evaluation was performed, for use by
+    interactive mode.
+    """
     print(f"\n\033[1m🔍 Charmhub Public Listing Self-Review for '{charm_name}'\033[0m")
     print('=' * (45 + len(charm_name)))
 
@@ -252,6 +257,15 @@ def print_self_review_results(
         'template=listing-request.yml'
     )
 
+    if results:
+        return EvaluationResult(
+            checks=results,
+            charmcraft_data=charmcraft_data,
+            doc_context=doc_context,
+            code_context=code_context,
+        )
+    return None
+
 
 def main():
     """Main entry point for the self-review tool."""
@@ -272,6 +286,11 @@ def main():
         action='store_true',
         help='Enable AI code quality analysis (requires Copilot SDK, slower)',
     )
+    parser.add_argument(
+        '--interactive',
+        action='store_true',
+        help='Launch interactive AI assistant after review (requires Copilot SDK)',
+    )
 
     args = parser.parse_args()
 
@@ -280,12 +299,20 @@ def main():
         sys.exit(1)
 
     try:
-        print_self_review_results(
+        evaluation = print_self_review_results(
             charm_name=args.charm_name,
             project_repo=args.repository,
             ci_linting=args.ci_linting_url or '',
             code_review=args.code_review,
         )
+
+        if args.interactive and evaluation:
+            run_interactive(args.charm_name, evaluation)
+        elif args.interactive:
+            print(
+                '\n⚠️  Interactive mode requires a repository to be specified '
+                'and evaluation to succeed.'
+            )
     except KeyboardInterrupt:
         print('\n\n⚡ Review cancelled by user.')
         sys.exit(1)
