@@ -102,5 +102,6 @@ def print_ai_unavailable_notice():
     print(
         '\nNote: AI-powered features are disabled (no AI backend available).'
         '\n      Copilot: install with: uv sync --group ai'
-        '\n      Snap:    install an inference snap, e.g. sudo snap install gemma3'
+        '\n      Snap:    install Python deps with: uv sync --group snap-ai'
+        '\n               and an inference snap, e.g. sudo snap install gemma3'
     )
