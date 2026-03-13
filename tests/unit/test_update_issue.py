@@ -280,6 +280,7 @@ def test_apply_automated_checks_ai_error_is_graceful():
         context={},
     )
     comment = '* [ ] The charm provides a license statement.'
+
     with (
         mock.patch(
             'charmhub_listing_review.update_issue.evaluate',
@@ -287,7 +288,7 @@ def test_apply_automated_checks_ai_error_is_graceful():
         ),
         mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=True),
         mock.patch(
-            'charmhub_listing_review.update_issue.asyncio.run',
+            'charmhub_listing_review.update_issue.explain_and_summarise',
             side_effect=RuntimeError('Copilot auth failed'),
         ),
     ):
