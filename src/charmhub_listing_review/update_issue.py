@@ -41,11 +41,11 @@ from typing import TypedDict, cast
 
 import yaml
 
+from .ai_backend import resolve_backend
 from .ai_client import (
     assess_documentation,
     assess_metadata,
     explain_and_summarise,
-    is_ai_available,
 )
 from .ai_code_review import analyse_code
 from .evaluate import evaluate
@@ -322,12 +322,14 @@ review within the next three working days.
         )
 
 
-def apply_automated_checks(issue_data: _IssueData, comment: str):
+def apply_automated_checks(issue_data: _IssueData, comment: str, ai_backend_choice: str = 'auto'):
     """Adjust the comment to tick items based on automated checks.
 
-    If the Copilot SDK is available, also adds AI-generated explanations
+    If an AI backend is available, also adds AI-generated explanations
     as sub-bullets under failed checklist items, and prepends an AI summary.
     """
+    backend = resolve_backend(ai_backend_choice)
+
     evaluation = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
@@ -335,7 +337,7 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['contribution_link'],
         issue_data['license_link'],
         issue_data['security_link'],
-        collect_code=is_ai_available(),
+        collect_code=backend is not None,
     )
     results = evaluation.checks
 
@@ -343,24 +345,32 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
     ai_doc_assessment = ''
     ai_meta_assessment = ''
     ai_code_analysis = ''
-    if is_ai_available():
+    if backend is not None:
         try:
-            results, ai_summary = asyncio.run(explain_and_summarise(issue_data['name'], results))
+            results, ai_summary = asyncio.run(
+                explain_and_summarise(backend, issue_data['name'], results)
+            )
         except Exception:  # noqa: S110
             pass  # AI features are best-effort.
         if evaluation.doc_context:
             try:
-                ai_doc_assessment = asyncio.run(assess_documentation(evaluation.doc_context))
+                ai_doc_assessment = asyncio.run(
+                    assess_documentation(backend, evaluation.doc_context)
+                )
             except Exception:  # noqa: S110
                 pass
         if evaluation.charmcraft_data:
             try:
-                ai_meta_assessment = asyncio.run(assess_metadata(evaluation.charmcraft_data))
+                ai_meta_assessment = asyncio.run(
+                    assess_metadata(backend, evaluation.charmcraft_data)
+                )
             except Exception:  # noqa: S110
                 pass
         if evaluation.code_context.get('code_files'):
             try:
-                ai_code_analysis = asyncio.run(analyse_code(evaluation.code_context['code_files']))
+                ai_code_analysis = asyncio.run(
+                    analyse_code(backend, evaluation.code_context['code_files'])
+                )
             except Exception:  # noqa: S110
                 pass
 
@@ -434,6 +444,12 @@ def main():
         type=str,
         help='Override automatic reviewer assignment with this GitHub username',
     )
+    parser.add_argument(
+        '--ai-backend',
+        choices=['copilot', 'snap', 'auto'],
+        default='auto',
+        help='AI backend to use (default: auto)',
+    )
     args = parser.parse_args()
 
     issue_data = get_details_from_issue(args.issue_number)
@@ -446,7 +462,7 @@ def main():
         issue_data['ci_integration_url'],
         issue_data['documentation_link'],
     )
-    comment = apply_automated_checks(issue_data, comment)
+    comment = apply_automated_checks(issue_data, comment, args.ai_backend)
 
     update_gh_issue(
         args.issue_number,

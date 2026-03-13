@@ -19,16 +19,13 @@ from __future__ import annotations
 import asyncio
 import itertools
 import pathlib
+import typing
 from typing import Any
 
-from .ai_client import (
-    _LLM_TIMEOUT_SECONDS,
-    _sanitise_ai_output_multiline,
-    create_session,
-    send_prompt,
-    start_client,
-    stop_client,
-)
+from .ai_client import _LLM_TIMEOUT_SECONDS, _sanitise_ai_output_multiline
+
+if typing.TYPE_CHECKING:
+    from .ai_backend import AIBackend
 
 _MAX_FILE_LENGTH = 3000
 
@@ -103,10 +100,11 @@ def _add_file(
         pass
 
 
-async def analyse_code(code_context: dict[str, str]) -> str:
+async def analyse_code(backend: AIBackend, code_context: dict[str, str]) -> str:
     """Analyse charm code for quality issues using AI.
 
     Args:
+        backend: The AI backend to use.
         code_context: Dictionary mapping file paths to their content,
             as returned by collect_charm_code().
 
@@ -122,13 +120,15 @@ async def analyse_code(code_context: dict[str, str]) -> str:
 
     prompt = f'Analyse the following charm source code:\n\n{files_text}'
 
-    await start_client()
+    await backend.start()
     try:
-        session = await create_session(CODE_REVIEW_SYSTEM_PROMPT)
-        raw = await asyncio.wait_for(send_prompt(session, prompt), timeout=_LLM_TIMEOUT_SECONDS)
+        raw = await asyncio.wait_for(
+            backend.send_message(CODE_REVIEW_SYSTEM_PROMPT, prompt),
+            timeout=_LLM_TIMEOUT_SECONDS,
+        )
         return _sanitise_ai_output_multiline(raw)
     finally:
-        await stop_client()
+        await backend.stop()
 
 
 def collect_code_context(repo_dir: pathlib.Path) -> dict[str, Any]:

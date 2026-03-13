@@ -266,55 +266,171 @@ the charm with `juju deploy`.
 
 ---
 
-## Phase 6: Canonical Inference Snap Backend (Investigation)
+## Phase 6: Canonical Inference Snap Backend
 
-**Goal:** Investigate whether any of the Canonical inference snaps (which
-expose an OpenAI-compatible API) can be used as an alternative backend to
-GitHub Copilot for some or all of the AI features.
+**Goal:** Add support for Canonical inference snaps as an alternative AI
+backend, so the tool can run with a local model instead of requiring GitHub
+Copilot.
 
-**Implementation:**
+**Depends on:** Phase 0 (ai_client.py).
 
-- Research which Canonical inference snaps are available and what models they
-  provide.
-- Create a backend abstraction (or wrapper) so that the existing Copilot
-  integration and the snap-based backend can be used interchangeably.
-- Add a CLI option (for example, `--ai-backend copilot|snap`) to let the user
-  choose which backend to use.
-- The snap backend would use the OpenAI-compatible API exposed by the snap,
-  wrapped to match the same interface used by the Copilot SDK integration.
-- Evaluate whether all phases (1-5) work acceptably with the snap models or
-  whether some features should be Copilot-only.
+### 6.1: Investigation Findings
+
+#### Available Snaps
+
+| Snap | Model | Input/Output | Hardware |
+|---|---|---|---|
+| `deepseek-r1` | DeepSeek R1 | Text → Text (reasoning) | Intel GPU/NPU/CPU, NVIDIA, Ampere |
+| `gemma3` | Gemma 3 | Text+Image → Text | CPU, Intel, NVIDIA |
+| `nemotron-3-nano` | Nemotron 3 Nano | Text → Text | CPU, NVIDIA |
+| `qwen-vl` | Qwen 2.5 VL | Text+Image → Text | Intel, NVIDIA, Ampere |
+
+All snaps expose an **OpenAI-compatible API** at
+`http://localhost:<port>/<base-path>` with no authentication. Standard
+`/chat/completions` and `/models` endpoints. Install is
+`sudo snap install <name>`. Run `<snap-name> status` to discover the API URL.
+
+See: https://documentation.ubuntu.com/inference-snaps/
+
+#### Phase Compatibility Assessment
+
+| Phase | Copilot (GPT-4.1) | Snap (local models) | Notes |
+|---|---|---|---|
+| 1 — Failure explanations | Excellent | Good | Short, structured output — local models handle this well. |
+| 2 — Review summary | Excellent | Good | Summarisation is a strength of most models. |
+| 3a — Doc quality | Excellent | Adequate | Needs nuanced judgement; smaller models may miss subtleties. |
+| 3b — Metadata quality | Excellent | Good | Relatively constrained evaluation task. |
+| 4 — Code review | Excellent | Marginal | Needs deep understanding of Juju/Ops patterns; smaller models struggle. |
+| 5 — Interactive assistant | Excellent | Adequate | Multi-turn coherence varies with model size. |
+
+**Recommendation:** All phases should be available with both backends. Users
+can choose based on their quality/privacy/availability trade-offs. No features
+should be artificially restricted to one backend.
+
+### 6.2: Backend Abstraction (`ai_backend.py`, new module)
+
+Introduce a protocol that both backends implement:
+
+```python
+class AIBackend(typing.Protocol):
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+    async def send_message(
+        self,
+        system_message: str,
+        prompt: str,
+    ) -> str: ...
+    def is_available(self) -> bool: ...
+```
+
+- `send_message` combines session creation and prompt sending into a single
+  call. This is the only interaction pattern the high-level functions need.
+  The interactive module (Phase 5) needs multi-turn conversation, so add a
+  session-based interface as well:
+
+```python
+class AISession(typing.Protocol):
+    async def send(self, prompt: str) -> str: ...
+
+class AIBackend(typing.Protocol):
+    # ... (as above)
+    async def create_session(self, system_message: str) -> AISession: ...
+```
+
+### 6.3: `CopilotBackend` implementation
+
+Refactor the existing `ai_client.py` low-level functions (`start_client`,
+`stop_client`, `create_session`, `send_prompt`) into a class implementing
+`AIBackend`. The high-level domain functions (`explain_failures`,
+`generate_summary`, etc.) remain as module-level functions but accept a
+backend instance instead of calling the low-level functions directly.
+
+### 6.4: `SnapBackend` implementation (`snap_backend.py`, new module)
+
+- Uses the `openai` Python library with a custom `base_url` pointing to the
+  local snap API endpoint.
+- `is_available()` checks whether the configured endpoint responds to
+  `GET /models`.
+- `send_message()` calls `/chat/completions` with the system message and
+  user prompt.
+- `create_session()` returns a `SnapSession` that accumulates messages for
+  multi-turn conversation.
+- No authentication required — uses a placeholder API key
+  (`api_key='not-needed'`).
+
+Configuration:
+
+- `SNAP_API_URL` environment variable, or auto-discovered by checking
+  common snap ports.
+- `SNAP_MODEL` environment variable, or auto-discovered via `GET /models`.
+
+### 6.5: Backend Selection
+
+- New CLI option: `--ai-backend copilot|snap|auto` (default: `auto`).
+- `auto` tries Copilot first (if SDK installed), then snap (if endpoint
+  reachable), then disables AI.
+- Environment variable `CHARMHUB_REVIEW_AI_BACKEND` as an alternative to
+  the CLI flag.
+- `is_ai_available()` updated to reflect the selected backend's
+  availability.
+- `print_ai_unavailable_notice()` updated to suggest both installation
+  methods.
+
+### 6.6: Dependency Changes
+
+- Add `openai` to a new optional dependency group in `pyproject.toml`:
+  `[dependency-groups] snap-ai = ["openai"]`
+- The `openai` library is only imported when the snap backend is selected.
+
+### 6.7: Security Considerations (Snap-Specific)
+
+- **Local-only by default.** Snaps listen on `127.0.0.1`. No data leaves
+  the machine unless the user explicitly reconfigures the snap.
+- **No authentication.** The local API has no auth. This is acceptable for
+  a localhost service but means any local process can query it. Document
+  this for users who run reviews in shared environments.
+- **Model quality.** Smaller models are more susceptible to prompt injection
+  and less reliable at following structured output instructions. The
+  existing output sanitisation and "AI output is advisory only" design
+  mitigate this, but it should be documented that snap-based results may
+  be less reliable.
+- **Resource usage.** Local inference can consume significant CPU/GPU/RAM.
+  The tool should document minimum hardware recommendations for each snap.
 
 ---
 
 ## Data Flow
 
 ```
-CLI args
+CLI args (--ai-backend copilot|snap|auto)
+  │
+  ▼
+resolve_backend() → AIBackend           (Phase 6)
   │
   ▼
 evaluate() → list[CheckResult]          (deterministic, always runs)
   │
-  ├──► explain_failures()               (Phase 1)
-  ├──► generate_summary()               (Phase 2)
-  ├──► assess_documentation()           (Phase 3a)
-  ├──► assess_metadata()                (Phase 3b)
-  ├──► analyse_code()                   (Phase 4, opt-in)
+  ├──► explain_failures(backend)        (Phase 1)
+  ├──► generate_summary(backend)        (Phase 2)
+  ├──► assess_documentation(backend)    (Phase 3a)
+  ├──► assess_metadata(backend)         (Phase 3b)
+  ├──► analyse_code(backend)            (Phase 4, opt-in)
   │
   ▼
 self_review.py / update_issue.py        (renders all results)
   │
-  └──► interactive REPL                 (Phase 5, opt-in)
+  └──► interactive REPL(backend)        (Phase 5, opt-in)
 ```
 
 ## Graceful Degradation
 
-All AI features are optional. When the Copilot SDK or CLI is not available:
+All AI features are optional. When no backend is available:
 
-- `ai_client.is_ai_available()` returns `False`
+- `is_ai_available()` returns `False`
 - All AI calls are skipped
-- Output is identical to current behavior
-- A single info line is printed suggesting how to install the SDK
+- Output is identical to non-AI behaviour
+- A single info line is printed suggesting how to install the Copilot SDK
+  or a Canonical inference snap
 
 ## Backward Compatibility
 
@@ -377,6 +493,9 @@ or details about the review infrastructure.
 - **Copilot SDK isolation.** The Copilot CLI handles authentication
   separately; the SDK session should not have access to credentials beyond
   what is needed for the API call itself.
+- **Snap backend isolation.** The snap backend communicates only with
+  `localhost`. No data leaves the machine unless the user has explicitly
+  reconfigured the snap to listen on a network interface.
 
 ### Denial of Service / Resource Exhaustion
 
@@ -412,16 +531,16 @@ into running arbitrary code.
 
 ### Supply Chain
 
-**Threat:** The `github-copilot-sdk` dependency itself could be compromised,
-or a typosquatted package could be installed instead.
+**Threat:** The `github-copilot-sdk` or `openai` dependencies could be
+compromised, or typosquatted packages could be installed instead.
 
 **Mitigations:**
 
 - **Dependency pinning.** Use locked dependency files (`uv.lock`) to pin
   exact versions.
-- **Optional dependency group.** The SDK is in an optional `ai` group, so
-  environments that do not need AI features are not exposed to this
-  dependency at all.
+- **Optional dependency groups.** The SDK is in an optional `ai` group and
+  the OpenAI library is in an optional `snap-ai` group, so environments
+  that do not need AI features are not exposed to these dependencies.
 
 ### Cross-Review Contamination
 
@@ -430,8 +549,9 @@ from one charm review could leak into another.
 
 **Mitigations:**
 
-- **Fresh sessions per review.** Each review run creates new Copilot
-  sessions. The client is started and stopped within each AI function call.
+- **Fresh sessions per review.** Each review run creates new backend
+  sessions (Copilot or snap). The client is started and stopped within
+  each AI function call.
 - **No persistent state.** No review data is cached between runs.
 
 ## Testing Strategy
@@ -443,3 +563,8 @@ from one charm review could leak into another.
 - Test `collect_charm_code()` and `doc_quality_context()` with tmp_path fixtures.
 - Update all existing tests directly for the `CheckResult` return type (no
   backward-compat wrappers needed).
+- Test `AIBackend` protocol compliance for both `CopilotBackend` and
+  `SnapBackend`.
+- Test `SnapBackend.is_available()` with mocked HTTP responses.
+- Test backend resolution logic (`auto`, explicit selection, fallback).
+- Test `SnapSession` multi-turn message accumulation.

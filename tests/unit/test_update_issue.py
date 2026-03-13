@@ -220,7 +220,7 @@ def test_apply_automated_checks_ticks_passed():
             'charmhub_listing_review.update_issue.evaluate',
             return_value=_make_evaluation([result]),
         ),
-        mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=False),
+        mock.patch('charmhub_listing_review.update_issue.resolve_backend', return_value=None),
     ):
         output = update_issue.apply_automated_checks(_make_issue_data(), comment)
     assert '* [x] The charm provides a license statement.' in output
@@ -241,7 +241,7 @@ def test_apply_automated_checks_ai_explanation():
             'charmhub_listing_review.update_issue.evaluate',
             return_value=_make_evaluation([result]),
         ),
-        mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=False),
+        mock.patch('charmhub_listing_review.update_issue.resolve_backend', return_value=None),
     ):
         output = update_issue.apply_automated_checks(_make_issue_data(), comment)
     assert '_AI: The LICENSE file was not recognised._' in output
@@ -262,7 +262,7 @@ def test_apply_automated_checks_ai_disabled():
             'charmhub_listing_review.update_issue.evaluate',
             return_value=_make_evaluation([result]),
         ),
-        mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=False),
+        mock.patch('charmhub_listing_review.update_issue.resolve_backend', return_value=None),
         mock.patch('charmhub_listing_review.update_issue.explain_and_summarise') as mock_ai,
     ):
         update_issue.apply_automated_checks(_make_issue_data(), comment)
@@ -279,15 +279,18 @@ def test_apply_automated_checks_ai_error_is_graceful():
     )
     comment = '* [ ] The charm provides a license statement.'
 
+    mock_backend = mock.Mock()
     with (
         mock.patch(
             'charmhub_listing_review.update_issue.evaluate',
             return_value=_make_evaluation([result]),
         ),
-        mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=True),
+        mock.patch(
+            'charmhub_listing_review.update_issue.resolve_backend', return_value=mock_backend
+        ),
         mock.patch(
             'charmhub_listing_review.update_issue.explain_and_summarise',
-            side_effect=RuntimeError('Copilot auth failed'),
+            side_effect=RuntimeError('Backend auth failed'),
         ),
     ):
         # Should not raise — AI errors are swallowed.

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Test the AI client module."""
+"""Test the AI client module and backend abstraction."""
 
 import asyncio
 from unittest import mock
@@ -29,22 +29,15 @@ def _make_result(name, passed, description='* [ ] Test check.', **ctx):
     return CheckResult(name=name, passed=passed, description=description, context=ctx)
 
 
-@mock.patch('charmhub_listing_review.ai_client.shutil.which', return_value=None)
-def test_ai_not_available_no_cli(mock_which):
-    """AI is unavailable when the Copilot CLI is not found."""
-    ai_client._copilot_available = None  # Reset cache.
-    assert ai_client.is_ai_available() is False
-    ai_client._copilot_available = None  # Clean up.
-
-
-@mock.patch('charmhub_listing_review.ai_client.shutil.which', return_value='/usr/bin/copilot')
-def test_ai_not_available_no_sdk(mock_which):
-    """AI is unavailable when the SDK cannot be imported."""
-    ai_client._copilot_available = None  # Reset cache.
-    with mock.patch.dict('sys.modules', {'copilot': None}):
-        # Importing 'copilot' will raise ImportError when set to None.
-        assert ai_client.is_ai_available() is False
-    ai_client._copilot_available = None  # Clean up.
+def _make_mock_backend(response='Fix by doing X.'):
+    """Create a mock AIBackend with a configurable response."""
+    backend = mock.AsyncMock()
+    backend.is_available.return_value = True
+    session = mock.AsyncMock()
+    session.send.return_value = response
+    backend.create_session.return_value = session
+    backend.send_message.return_value = response
+    return backend
 
 
 def test_explain_failures_populates_explanations():
@@ -56,26 +49,8 @@ def test_explain_failures_populates_explanations():
         _make_result('check_d', passed=False, error='not found'),
     ]
 
-    mock_session = mock.AsyncMock()
-    mock_response = mock.Mock()
-    mock_response.data.content = 'Fix by doing X.'
-    mock_session.send_and_wait.return_value = mock_response
-
-    with (
-        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
-        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
-        mock.patch(
-            'charmhub_listing_review.ai_client.create_session',
-            new_callable=mock.AsyncMock,
-            return_value=mock_session,
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_client.send_prompt',
-            new_callable=mock.AsyncMock,
-            return_value='Fix by doing X.',
-        ),
-    ):
-        updated = asyncio.run(ai_client.explain_failures(results))
+    backend = _make_mock_backend()
+    updated = asyncio.run(ai_client.explain_failures(backend, results))
 
     # Only failed checks get explanations.
     assert updated[0].ai_explanation == ''  # passed=True
@@ -91,13 +66,10 @@ def test_explain_failures_no_failures_skips_ai():
         _make_result('check_b', passed=None),
     ]
 
-    # Should not call any AI functions.
-    with mock.patch(
-        'charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock
-    ) as mock_start:
-        updated = asyncio.run(ai_client.explain_failures(results))
+    backend = _make_mock_backend()
+    updated = asyncio.run(ai_client.explain_failures(backend, results))
 
-    mock_start.assert_not_called()
+    backend.start.assert_not_called()
     assert updated is results
 
 
@@ -135,20 +107,8 @@ def test_generate_summary():
         _make_result('check_c', passed=None, description='* [ ] Check C needs review.'),
     ]
 
-    with (
-        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
-        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
-        mock.patch(
-            'charmhub_listing_review.ai_client.create_session',
-            new_callable=mock.AsyncMock,
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_client.send_prompt',
-            new_callable=mock.AsyncMock,
-            return_value='- PRIORITY: Fix Check B.\n- GOOD: Check A passes.',
-        ),
-    ):
-        summary = asyncio.run(ai_client.generate_summary('test-charm', results))
+    backend = _make_mock_backend('- PRIORITY: Fix Check B.\n- GOOD: Check A passes.')
+    summary = asyncio.run(ai_client.generate_summary(backend, 'test-charm', results))
 
     assert 'PRIORITY' in summary
     assert 'Check B' in summary
@@ -162,20 +122,8 @@ def test_assess_documentation_sanitises_output():
     )
     doc_context = {'readme_content': '# Charm'}
 
-    with (
-        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
-        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
-        mock.patch(
-            'charmhub_listing_review.ai_client.create_session',
-            new_callable=mock.AsyncMock,
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_client.send_prompt',
-            new_callable=mock.AsyncMock,
-            return_value=malicious_response,
-        ),
-    ):
-        result = asyncio.run(assess_documentation(doc_context))
+    backend = _make_mock_backend(malicious_response)
+    result = asyncio.run(assess_documentation(backend, doc_context))
 
     assert '<script>' not in result
     assert 'https://evil.example.com' not in result
@@ -187,20 +135,8 @@ def test_assess_metadata_sanitises_output():
     malicious_response = '- Title: ![tracker](https://evil.example.com/pixel.png) OK'
     charmcraft_data = {'name': 'my-charm', 'title': 'My Charm'}
 
-    with (
-        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
-        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
-        mock.patch(
-            'charmhub_listing_review.ai_client.create_session',
-            new_callable=mock.AsyncMock,
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_client.send_prompt',
-            new_callable=mock.AsyncMock,
-            return_value=malicious_response,
-        ),
-    ):
-        result = asyncio.run(assess_metadata(charmcraft_data))
+    backend = _make_mock_backend(malicious_response)
+    result = asyncio.run(assess_metadata(backend, charmcraft_data))
 
     assert 'https://evil.example.com' not in result
     assert '![' not in result
@@ -213,23 +149,13 @@ def test_assess_documentation():
         'documentation_url': 'https://docs.example.com',
     }
 
-    with (
-        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
-        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
-        mock.patch(
-            'charmhub_listing_review.ai_client.create_session',
-            new_callable=mock.AsyncMock,
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_client.send_prompt',
-            new_callable=mock.AsyncMock,
-            return_value='Needs work: missing usage examples.',
-        ) as mock_send,
-    ):
-        result = asyncio.run(assess_documentation(doc_context))
+    backend = _make_mock_backend('Needs work: missing usage examples.')
+    result = asyncio.run(assess_documentation(backend, doc_context))
 
     assert 'usage examples' in result
-    prompt_arg = mock_send.call_args[0][1]
+    # Verify the backend was called with the right system prompt.
+    backend.send_message.assert_called_once()
+    prompt_arg = backend.send_message.call_args[0][1]
     assert 'My Charm' in prompt_arg
     assert 'docs/tutorial.md' in prompt_arg
 
@@ -242,28 +168,17 @@ def test_assess_metadata():
         'description': 'This charm does things.',
     }
 
-    with (
-        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
-        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
-        mock.patch(
-            'charmhub_listing_review.ai_client.create_session',
-            new_callable=mock.AsyncMock,
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_client.send_prompt',
-            new_callable=mock.AsyncMock,
-            return_value='- Summary: Good.\n- Description: Needs more detail.',
-        ) as mock_send,
-    ):
-        result = asyncio.run(assess_metadata(charmcraft_data))
+    backend = _make_mock_backend('- Summary: Good.\n- Description: Needs more detail.')
+    result = asyncio.run(assess_metadata(backend, charmcraft_data))
 
     assert 'Description' in result
-    prompt_arg = mock_send.call_args[0][1]
+    prompt_arg = backend.send_message.call_args[0][1]
     assert 'My Charm' in prompt_arg
 
 
 def test_assess_metadata_empty():
-    result = asyncio.run(assess_metadata({}))
+    backend = _make_mock_backend()
+    result = asyncio.run(assess_metadata(backend, {}))
     assert result == ''
 
 
@@ -308,30 +223,15 @@ def test_collect_charm_code_empty(tmp_path):
 def test_analyse_code():
     code_context = {'src/charm.py': 'class MyCharm: pass'}
 
-    with (
-        mock.patch(
-            'charmhub_listing_review.ai_code_review.start_client', new_callable=mock.AsyncMock
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_code_review.stop_client', new_callable=mock.AsyncMock
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_code_review.create_session',
-            new_callable=mock.AsyncMock,
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_code_review.send_prompt',
-            new_callable=mock.AsyncMock,
-            return_value='- warning: Missing status updates.',
-        ),
-    ):
-        result = asyncio.run(analyse_code(code_context))
+    backend = _make_mock_backend('- warning: Missing status updates.')
+    result = asyncio.run(analyse_code(backend, code_context))
 
     assert 'Missing status' in result
 
 
 def test_analyse_code_empty():
-    result = asyncio.run(analyse_code({}))
+    backend = _make_mock_backend()
+    result = asyncio.run(analyse_code(backend, {}))
     assert result == ''
 
 
@@ -339,26 +239,14 @@ def test_generate_summary_with_metadata():
     results = [_make_result('check_a', passed=True, description='* [x] Check A.')]
     metadata = {'name': 'my-charm', 'title': 'My Charm', 'summary': 'A test charm.'}
 
-    with (
-        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
-        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
-        mock.patch(
-            'charmhub_listing_review.ai_client.create_session',
-            new_callable=mock.AsyncMock,
-        ),
-        mock.patch(
-            'charmhub_listing_review.ai_client.send_prompt',
-            new_callable=mock.AsyncMock,
-            return_value='All checks pass.',
-        ) as mock_send,
-    ):
-        summary = asyncio.run(
-            ai_client.generate_summary('my-charm', results, charmcraft_data=metadata)
-        )
+    backend = _make_mock_backend('All checks pass.')
+    summary = asyncio.run(
+        ai_client.generate_summary(backend, 'my-charm', results, charmcraft_data=metadata)
+    )
 
     assert summary == 'All checks pass.'
     # Verify metadata was included in the prompt.
-    prompt_arg = mock_send.call_args[0][1]
+    prompt_arg = backend.send_message.call_args[0][1]
     assert 'My Charm' in prompt_arg
 
 
@@ -387,8 +275,8 @@ def test_build_context_prompt():
 def test_run_interactive_ai_unavailable(capsys):
     evaluation = EvaluationResult(checks=[])
 
-    with mock.patch('charmhub_listing_review.interactive.is_ai_available', return_value=False):
+    with mock.patch('charmhub_listing_review.interactive.resolve_backend', return_value=None):
         run_interactive('my-charm', evaluation)
 
     output = capsys.readouterr().out
-    assert 'Copilot SDK' in output
+    assert 'no AI backend available' in output
