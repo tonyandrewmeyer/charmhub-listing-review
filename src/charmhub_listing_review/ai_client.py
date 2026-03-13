@@ -455,7 +455,7 @@ async def assess_metadata(charmcraft_data: dict) -> str:
 
     prompt = (
         f'Assess the quality of these charmcraft.yaml text fields:\n\n'
-        f'{fields_text}\n'
+        f'<metadata-fields>\n{fields_text}</metadata-fields>\n\n'
         f'Evaluate each field and suggest improvements where needed.'
     )
 
