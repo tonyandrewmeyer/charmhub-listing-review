@@ -42,6 +42,7 @@ from .ai_client import (
 )
 from .ai_code_review import analyse_code
 from .evaluate import CheckResult, EvaluationResult, evaluate
+from .interactive import run_interactive
 from .sphinx_refs import convert_sphinx_refs
 from .update_issue import issue_comment
 
@@ -306,8 +307,6 @@ def main():
         )
 
         if args.interactive and evaluation:
-            from .interactive import run_interactive
-
             run_interactive(args.charm_name, evaluation)
         elif args.interactive:
             print(

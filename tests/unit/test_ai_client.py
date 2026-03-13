@@ -20,7 +20,8 @@ from unittest import mock
 import charmhub_listing_review.ai_client as ai_client
 from charmhub_listing_review.ai_client import assess_documentation, assess_metadata
 from charmhub_listing_review.ai_code_review import analyse_code, collect_charm_code
-from charmhub_listing_review.evaluate import CheckResult, _gather_doc_context
+from charmhub_listing_review.evaluate import CheckResult, EvaluationResult, _gather_doc_context
+from charmhub_listing_review.interactive import _build_context_prompt, run_interactive
 from charmhub_listing_review.self_review import format_checklist_for_console
 
 
@@ -362,9 +363,6 @@ def test_generate_summary_with_metadata():
 
 
 def test_build_context_prompt():
-    from charmhub_listing_review.evaluate import EvaluationResult
-    from charmhub_listing_review.interactive import _build_context_prompt
-
     evaluation = EvaluationResult(
         checks=[
             _make_result('check_a', passed=True, description='* [x] Check A passed.'),
@@ -387,9 +385,6 @@ def test_build_context_prompt():
 
 
 def test_run_interactive_ai_unavailable(capsys):
-    from charmhub_listing_review.evaluate import EvaluationResult
-    from charmhub_listing_review.interactive import run_interactive
-
     evaluation = EvaluationResult(checks=[])
 
     with mock.patch('charmhub_listing_review.interactive.is_ai_available', return_value=False):

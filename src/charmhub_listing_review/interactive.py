@@ -20,13 +20,14 @@ questions about their review results and get AI-powered guidance.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import re
 import sys
 
 from .ai_client import create_session, is_ai_available, send_prompt, start_client, stop_client
-from .evaluate import EvaluationResult
+from .evaluate import EvaluationResult, evaluate
 
 INTERACTIVE_SYSTEM_PROMPT = """\
 You are an interactive assistant helping a charm developer prepare their charm \
@@ -182,10 +183,6 @@ def run_interactive(
 
 def main():
     """Entry point for the interactive-review command."""
-    import argparse
-
-    from .evaluate import evaluate
-
     parser = argparse.ArgumentParser(
         description='Interactive AI-powered charm review assistant.',
     )
