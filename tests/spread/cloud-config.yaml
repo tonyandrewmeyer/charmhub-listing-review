@@ -2,7 +2,7 @@
 users:
   - name: spread
     lock_passwd: false
-    passwd: SPREAD_PASSWORD
+    plain_text_passwd: SPREAD_PASSWORD
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: sudo
