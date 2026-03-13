@@ -41,7 +41,7 @@ from typing import TypedDict, cast
 
 import yaml
 
-from .ai_client import explain_failures, generate_summary, is_ai_available
+from .ai_client import explain_and_summarise, is_ai_available
 from .evaluate import evaluate
 from .sphinx_refs import convert_sphinx_refs
 
@@ -334,13 +334,9 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
     ai_summary = ''
     if is_ai_available():
         try:
-            results = asyncio.run(explain_failures(results))
+            results, ai_summary = asyncio.run(explain_and_summarise(issue_data['name'], results))
         except Exception:  # noqa: S110
-            pass  # AI explanations are optional; ignore errors and use original results.
-        try:
-            ai_summary = asyncio.run(generate_summary(issue_data['name'], results))
-        except Exception:  # noqa: S110
-            pass  # AI summary is best-effort.
+            pass  # AI features are best-effort.
 
     ai_explanations_added = False
     for result in results:

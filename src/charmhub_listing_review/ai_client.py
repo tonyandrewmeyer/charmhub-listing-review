@@ -281,6 +281,91 @@ async def generate_summary(
         await stop_client()
 
 
+async def explain_and_summarise(
+    charm_name: str,
+    results: list[CheckResult],
+    charmcraft_data: dict | None = None,
+) -> tuple[list[CheckResult], str]:
+    """Run both AI operations in a single event loop.
+
+    This avoids calling ``asyncio.run()`` twice with a cached
+    ``CopilotClient``, which can break if the client holds async state
+    tied to the first event loop.
+
+    Returns:
+        A tuple of (results_with_explanations, summary_string).
+        Either part may be unchanged/empty if that step fails.
+    """
+    await start_client()
+    try:
+        # Explanations first, so the summary can reference them.
+        try:
+            failed = [r for r in results if r.passed is False]
+            if failed:
+                session = await create_session(FAILURE_EXPLANATION_SYSTEM_PROMPT)
+                for result in failed:
+                    context_json = json.dumps(result.context, default=str)[:_MAX_CONTEXT_CHARS]
+                    prompt = (
+                        f'Check "{result.name}" failed.\n'
+                        f'Description: {result.description}\n\n'
+                        f'<repository-context>\n{context_json}\n</repository-context>'
+                        f'\n\nExplain why this failed and how to fix it.'
+                    )
+                    explanation = await asyncio.wait_for(
+                        send_prompt(session, prompt), timeout=_LLM_TIMEOUT_SECONDS
+                    )
+                    result.ai_explanation = _sanitise_ai_output(explanation)
+        except Exception:  # noqa: S110
+            pass  # AI explanations are best-effort.
+
+        summary = ''
+        try:
+            summary = await _generate_summary_impl(charm_name, results, charmcraft_data)
+        except Exception:  # noqa: S110
+            pass  # AI summary is best-effort.
+    finally:
+        await stop_client()
+
+    return results, summary
+
+
+async def _generate_summary_impl(
+    charm_name: str,
+    results: list[CheckResult],
+    charmcraft_data: dict | None = None,
+) -> str:
+    """Internal implementation of summary generation (without client lifecycle)."""
+    passed = sum(1 for r in results if r.passed is True)
+    failed = sum(1 for r in results if r.passed is False)
+    indeterminate = sum(1 for r in results if r.passed is None)
+
+    results_text = '\n'.join(
+        f'- [{r.name}] {_status_label(r.passed)}: {r.description}'
+        for r in results
+        if r.description
+    )
+
+    metadata_text = ''
+    if charmcraft_data:
+        for field in ('name', 'title', 'summary', 'description'):
+            value = charmcraft_data.get(field, '')
+            if value:
+                metadata_text += f'\n{field}: {value}'
+        metadata_text = metadata_text[:_MAX_CONTEXT_CHARS]
+
+    prompt = (
+        f'Charm: {charm_name}\n'
+        f'Results: {passed} passed, {failed} failed, {indeterminate} need manual review\n\n'
+        f'Check details:\n{results_text}\n'
+        f'{f"Metadata:{metadata_text}" if metadata_text else ""}\n\n'
+        f"Summarise this charm's readiness for public listing on Charmhub."
+    )
+
+    session = await create_session(REVIEW_SUMMARY_SYSTEM_PROMPT)
+    raw = await asyncio.wait_for(send_prompt(session, prompt), timeout=_LLM_TIMEOUT_SECONDS)
+    return _sanitise_ai_output_multiline(raw)
+
+
 def print_ai_unavailable_notice():
     """Print a notice that AI features are disabled."""
     print(
