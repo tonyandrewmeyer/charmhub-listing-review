@@ -179,7 +179,8 @@ def print_self_review_results(
     if ai_explanations:
         print(
             '\n\033[33m⚠️  AI output is a suggestion only. '
-            'AI makes mistakes — please check the AI responses carefully before acting on them.\033[0m'
+            'AI makes mistakes — please check the AI responses carefully '
+            'before acting on them.\033[0m'
         )
 
     completed_count = comment.count('* [x]')

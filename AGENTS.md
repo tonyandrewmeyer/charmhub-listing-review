@@ -56,6 +56,7 @@ pre-commit install
 - Google-style docstrings
 - Conventional commit messages (feat, fix, docs, ci, chore, etc.)
 - New files need Apache 2.0 copyright header with current year
+- Always UK English, *not* US English
 
 ## Pull Request Guidelines
 
