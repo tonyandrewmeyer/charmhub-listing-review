@@ -151,6 +151,62 @@ def test_generate_summary():
     assert 'Check B' in summary
 
 
+def test_assess_documentation_sanitises_output():
+    """assess_documentation strips dangerous content from LLM output."""
+    from charmhub_listing_review.ai_client import assess_documentation
+
+    malicious_response = (
+        'Looks good! Visit <script>alert(1)</script> or '
+        '[click here](https://evil.example.com) for more.'
+    )
+    doc_context = {'readme_content': '# Charm'}
+
+    with (
+        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
+        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
+        mock.patch(
+            'charmhub_listing_review.ai_client.create_session',
+            new_callable=mock.AsyncMock,
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_client.send_prompt',
+            new_callable=mock.AsyncMock,
+            return_value=malicious_response,
+        ),
+    ):
+        result = asyncio.run(assess_documentation(doc_context))
+
+    assert '<script>' not in result
+    assert 'https://evil.example.com' not in result
+    assert 'click here' in result  # Link text is preserved, URL stripped.
+
+
+def test_assess_metadata_sanitises_output():
+    """assess_metadata strips dangerous content from LLM output."""
+    from charmhub_listing_review.ai_client import assess_metadata
+
+    malicious_response = '- Title: ![tracker](https://evil.example.com/pixel.png) OK'
+    charmcraft_data = {'name': 'my-charm', 'title': 'My Charm'}
+
+    with (
+        mock.patch('charmhub_listing_review.ai_client.start_client', new_callable=mock.AsyncMock),
+        mock.patch('charmhub_listing_review.ai_client.stop_client', new_callable=mock.AsyncMock),
+        mock.patch(
+            'charmhub_listing_review.ai_client.create_session',
+            new_callable=mock.AsyncMock,
+        ),
+        mock.patch(
+            'charmhub_listing_review.ai_client.send_prompt',
+            new_callable=mock.AsyncMock,
+            return_value=malicious_response,
+        ),
+    ):
+        result = asyncio.run(assess_metadata(charmcraft_data))
+
+    assert 'https://evil.example.com' not in result
+    assert '![' not in result
+
+
 def test_assess_documentation():
     from charmhub_listing_review.ai_client import assess_documentation
 
