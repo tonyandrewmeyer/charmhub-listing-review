@@ -27,7 +27,7 @@ import json
 import re
 import shutil
 
-from .evaluate import CheckResult
+from ._models import CheckResult
 
 # Timeout for individual LLM calls, in seconds.
 _LLM_TIMEOUT_SECONDS = 30
