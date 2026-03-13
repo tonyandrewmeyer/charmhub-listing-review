@@ -44,4 +44,4 @@ execute: |
   echo "$output" | MATCH "❌.*optional"
 
 restore: |
-  rm -rf "$CHARM_DIR" 2>/dev/null || true
+  rm -rf "${CHARM_DIR:-}" 2>/dev/null || true

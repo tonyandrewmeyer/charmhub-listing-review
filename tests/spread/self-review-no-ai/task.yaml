@@ -40,4 +40,4 @@ execute: |
   echo "$output" | MATCH "0 failed"
 
 restore: |
-  rm -rf "$CHARM_DIR" 2>/dev/null || true
+  rm -rf "${CHARM_DIR:-}" 2>/dev/null || true

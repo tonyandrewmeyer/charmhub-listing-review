@@ -90,4 +90,5 @@ prepare: |
   fi
 
   pushd "$SPREAD_PATH"
+  uv python install
   uv sync

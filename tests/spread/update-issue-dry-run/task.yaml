@@ -56,5 +56,5 @@ execute: |
   MATCH "gh issue view 42" < "$MOCK_GH_LOG"
 
 restore: |
-  rm -rf "$CHARM_DIR" 2>/dev/null || true
-  rm -f "$MOCK_GH_LOG" 2>/dev/null || true
+  rm -rf "${CHARM_DIR:-}" 2>/dev/null || true
+  rm -f "${MOCK_GH_LOG:-}" 2>/dev/null || true

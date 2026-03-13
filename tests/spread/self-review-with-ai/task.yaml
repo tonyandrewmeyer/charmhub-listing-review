@@ -42,5 +42,5 @@ restore: |
     kill "$(cat mock-ai-server.pid)" 2>/dev/null || true
     rm -f mock-ai-server.pid
   fi
-  kill "$MOCK_PID" 2>/dev/null || true
-  rm -rf "$CHARM_DIR" 2>/dev/null || true
+  kill "${MOCK_PID:-}" 2>/dev/null || true
+  rm -rf "${CHARM_DIR:-}" 2>/dev/null || true
