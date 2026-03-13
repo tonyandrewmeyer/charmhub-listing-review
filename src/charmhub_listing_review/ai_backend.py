@@ -24,6 +24,8 @@ from __future__ import annotations
 import os
 import typing
 
+from . import copilot_backend, snap_backend
+
 
 class AISession(typing.Protocol):
     """A stateful multi-turn conversation session."""
@@ -76,25 +78,17 @@ def resolve_backend(choice: str = 'auto') -> AIBackend | None:
         return None
 
     if choice == 'copilot':
-        from . import copilot_backend
-
         backend = copilot_backend.CopilotBackend()
         return backend if backend.is_available() else None
 
     if choice == 'snap':
-        from . import snap_backend
-
         backend = snap_backend.SnapBackend()
         return backend if backend.is_available() else None
 
     # auto: try copilot, then snap.
-    from . import copilot_backend
-
     copilot = copilot_backend.CopilotBackend()
     if copilot.is_available():
         return copilot
-
-    from . import snap_backend
 
     snap = snap_backend.SnapBackend()
     if snap.is_available():

@@ -21,6 +21,8 @@ Uses the OpenAI-compatible API exposed by Canonical inference snaps
 from __future__ import annotations
 
 import os
+import urllib.error
+import urllib.request
 
 # Default ports used by common inference snaps.  When no explicit URL is
 # configured we probe these in order to auto-discover a running snap.
@@ -130,9 +132,6 @@ class SnapBackend:
     @staticmethod
     def _probe(url: str) -> bool:
         """Check if the given URL responds to a GET /models request."""
-        import urllib.error
-        import urllib.request
-
         try:
             req = urllib.request.Request(  # noqa: S310
                 f'{url}/models', method='GET'
