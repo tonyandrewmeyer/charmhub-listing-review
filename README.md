@@ -100,7 +100,8 @@ AI features require one of two backends:
   gemma3`. The snap runs a local model with an OpenAI-compatible API — no
   authentication or internet access required. See the
   [inference snaps documentation](https://documentation.ubuntu.com/inference-snaps/)
-  for available models and hardware requirements.
+  for available models and hardware requirements. Install Python dependencies
+  for this backend with `uv sync --group snap-ai`.
 
 When neither backend is available, the tool falls back to its standard
 behaviour and all AI sections are omitted.
