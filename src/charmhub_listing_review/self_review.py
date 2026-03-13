@@ -203,11 +203,12 @@ def print_self_review_results(
         f'{unknown_count} manual review needed\033[0m'
     )
 
-    # Print AI review summary if generated.
-    if results and is_ai_available() and ai_summary:
-        print('\n\033[1m🤖 AI Review Summary\033[0m')
-        print('-' * 40)
-        print(ai_summary)
+    # Print AI-driven outputs when available.
+    if results and is_ai_available():
+        if ai_summary:
+            print('\n\033[1m🤖 AI Review Summary\033[0m')
+            print('-' * 40)
+            print(ai_summary)
 
         if doc_context:
             try:
@@ -228,7 +229,6 @@ def print_self_review_results(
                     print(meta_assessment)
             except Exception:  # noqa: S110
                 pass
-
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')
     print('\n📋 To submit your charm for official review, create an issue at:')
