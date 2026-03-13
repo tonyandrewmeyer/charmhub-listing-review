@@ -6,7 +6,8 @@ execute: |
   pushd "${SPREAD_PATH}/${SPREAD_TASK}"
 
   # Install the gemma3 inference snap.
-  snap install gemma3
+  snap install gemma3 --beta
+  gemma3 status
 
   # Wait for the inference API to become ready (may take a few minutes on
   # first launch while the model loads).
@@ -71,5 +72,5 @@ execute: |
   echo "$output" | MATCH "AI output is a suggestion only"
 
 restore: |
-  rm -rf "$CHARM_DIR" 2>/dev/null || true
+  rm -rf "${CHARM_DIR:-}" 2>/dev/null || true
   snap remove gemma3 2>/dev/null || true
