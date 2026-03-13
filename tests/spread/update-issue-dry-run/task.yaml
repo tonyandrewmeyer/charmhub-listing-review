@@ -11,25 +11,25 @@ execute: |
 
   # Prepare the mock issue body (mimics the GitHub issue template output).
   export MOCK_GH_ISSUE_BODY="### Charm name
-test-charm
+  test-charm
 
-### Demo
-https://example.com/demo
+  ### Demo
+  https://example.com/demo
 
-### Project Repository
-file://$CHARM_DIR
+  ### Project Repository
+  file://$CHARM_DIR
 
-### CI Linting
-https://example.com/lint
+  ### CI Linting
+  https://example.com/lint
 
-### CI Release
-https://example.com/release
+  ### CI Release
+  https://example.com/release
 
-### CI Integration Tests
-https://example.com/integration
+  ### CI Integration Tests
+  https://example.com/integration
 
-### Documentation Link
-https://example.com/docs"
+  ### Documentation Link
+  https://example.com/docs"
 
   export MOCK_GH_COMMENTS="[]"
   export MOCK_GH_LOG=$(mktemp)

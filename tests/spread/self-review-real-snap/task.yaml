@@ -29,16 +29,16 @@ execute: |
   # Add a Python source file so the code review has something to analyse.
   mkdir -p "$CHARM_DIR/src"
   cat > "$CHARM_DIR/src/charm.py" << 'PYEOF'
-import ops
+  import ops
 
-class TestCharm(ops.CharmBase):
-    def __init__(self, *args):
-        super().__init__(*args)
-        self.framework.observe(self.on.install, self._on_install)
+  class TestCharm(ops.CharmBase):
+      def __init__(self, *args):
+          super().__init__(*args)
+          self.framework.observe(self.on.install, self._on_install)
 
-    def _on_install(self, event):
-        self.unit.status = ops.ActiveStatus()
-PYEOF
+      def _on_install(self, event):
+          self.unit.status = ops.ActiveStatus()
+  PYEOF
   cd "$CHARM_DIR" && git add -A && git commit -m "Add charm source" --quiet
   cd -
 
