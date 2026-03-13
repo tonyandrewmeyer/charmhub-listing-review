@@ -82,6 +82,7 @@ def evaluate(
     contribution_url: str,
     license_url: str,
     security_url: str,
+    collect_code: bool = False,
 ) -> EvaluationResult:
     """Evaluate the charm for listing on Charmhub.
 
@@ -111,9 +112,13 @@ def evaluate(
         charmcraft_data = _get_charmcraft_yaml(repo_dir)
         doc_context = _gather_doc_context(repo_dir, charmcraft_data)
 
-        from .ai_code_review import collect_code_context
+        code_context: dict[str, Any] = {}
+        if collect_code:
+            # Imported here to avoid a circular import
+            # (evaluate → ai_code_review → ai_client → evaluate).
+            from .ai_code_review import collect_code_context
 
-        code_context = collect_code_context(repo_dir)
+            code_context = collect_code_context(repo_dir)
     finally:
         shutil.rmtree(str(repo_dir), ignore_errors=True)
     return EvaluationResult(

@@ -40,6 +40,7 @@ from .ai_client import (
     explain_and_summarise,
     is_ai_available,
 )
+from .ai_code_review import analyse_code
 from .evaluate import CheckResult, evaluate
 from .sphinx_refs import convert_sphinx_refs
 from .update_issue import issue_comment
@@ -141,6 +142,7 @@ def print_self_review_results(
                 contribution_url,
                 license_url,
                 security_url,
+                collect_code=is_ai_available() and code_review,
             )
             results = evaluation.checks
             charmcraft_data = evaluation.charmcraft_data
@@ -233,10 +235,8 @@ def print_self_review_results(
             pass
 
     if is_ai_available() and code_review and code_context.get('code_files'):
-        from .ai_code_review import analyze_code
-
         try:
-            code_analysis = asyncio.run(analyze_code(code_context['code_files']))
+            code_analysis = asyncio.run(analyse_code(code_context['code_files']))
             if code_analysis:
                 print('\n\033[1m🔬 AI Code Quality Analysis\033[0m')
                 print('-' * 40)

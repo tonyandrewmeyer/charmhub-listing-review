@@ -19,6 +19,7 @@ from unittest import mock
 
 import charmhub_listing_review.ai_client as ai_client
 from charmhub_listing_review.ai_client import assess_documentation, assess_metadata
+from charmhub_listing_review.ai_code_review import analyse_code, collect_charm_code
 from charmhub_listing_review.evaluate import CheckResult, _gather_doc_context
 from charmhub_listing_review.self_review import format_checklist_for_console
 
@@ -287,8 +288,6 @@ def test_gather_doc_context_no_docs(tmp_path):
 
 
 def test_collect_charm_code(tmp_path):
-    from charmhub_listing_review.ai_code_review import collect_charm_code
-
     src_dir = tmp_path / 'src'
     src_dir.mkdir()
     (src_dir / 'charm.py').write_text('class MyCharm: pass')
@@ -301,15 +300,11 @@ def test_collect_charm_code(tmp_path):
 
 
 def test_collect_charm_code_empty(tmp_path):
-    from charmhub_listing_review.ai_code_review import collect_charm_code
-
     code = collect_charm_code(tmp_path)
     assert code == {}
 
 
-def test_analyze_code():
-    from charmhub_listing_review.ai_code_review import analyze_code
-
+def test_analyse_code():
     code_context = {'src/charm.py': 'class MyCharm: pass'}
 
     with (
@@ -329,15 +324,13 @@ def test_analyze_code():
             return_value='- warning: Missing status updates.',
         ),
     ):
-        result = asyncio.run(analyze_code(code_context))
+        result = asyncio.run(analyse_code(code_context))
 
     assert 'Missing status' in result
 
 
-def test_analyze_code_empty():
-    from charmhub_listing_review.ai_code_review import analyze_code
-
-    result = asyncio.run(analyze_code({}))
+def test_analyse_code_empty():
+    result = asyncio.run(analyse_code({}))
     assert result == ''
 
 
