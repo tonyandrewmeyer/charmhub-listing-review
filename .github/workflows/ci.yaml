@@ -55,3 +55,33 @@ jobs:
 
       - name: Run unit tests
         run: tox -e unit
+
+  integration:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098  # v7.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install spread
+        run: go install github.com/snapcore/spread/cmd/spread@latest
+
+      - name: Run integration tests
+        run: spread -v github-ci

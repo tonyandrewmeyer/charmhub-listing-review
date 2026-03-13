@@ -1,0 +1,46 @@
+summary: Self-review CLI runs with a mock AI backend (snap-compatible)
+systems:
+  - ubuntu-24.04
+
+execute: |
+  pushd "${SPREAD_PATH}/${SPREAD_TASK}"
+
+  # Start the mock AI server.
+  python3 "$SPREAD_PATH"/tests/spread/lib/mock-ai-server.py 18326 &
+  MOCK_PID=$!
+  # Wait for the server to be ready.
+  for i in $(seq 1 30); do
+    curl -sf http://127.0.0.1:18326/v3/models && break
+    sleep 0.2
+  done
+
+  # Create a passing test charm fixture.
+  CHARM_DIR=$(mktemp -d)
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+
+  # Run self-review with the snap backend pointed at our mock server.
+  # The openai package is required for the snap backend.
+  output=$(CHARMHUB_REVIEW_AI_BACKEND=snap \
+    SNAP_API_URL=http://127.0.0.1:18326/v3 \
+    SNAP_MODEL=mock-model \
+    uv run --directory "$SPREAD_PATH" --group snap-ai \
+    self-review \
+      --charm-name test-charm \
+      --repository "file://$CHARM_DIR" \
+      --ai-backend snap 2>&1) || true
+
+  echo "$output"
+
+  # AI features should have run (mock responses present).
+  echo "$output" | MATCH "AI Review Summary\|Mock AI response"
+
+  # The tool should still show check results.
+  echo "$output" | MATCH "passed"
+
+restore: |
+  if [ -f mock-ai-server.pid ]; then
+    kill "$(cat mock-ai-server.pid)" 2>/dev/null || true
+    rm -f mock-ai-server.pid
+  fi
+  kill "$MOCK_PID" 2>/dev/null || true
+  rm -rf "$CHARM_DIR" 2>/dev/null || true

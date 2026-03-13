@@ -1,0 +1,70 @@
+summary: update-issue dry-run with mock AI backend adds AI sections
+systems:
+  - ubuntu-24.04
+
+execute: |
+  pushd "${SPREAD_PATH}/${SPREAD_TASK}"
+
+  # Start the mock AI server.
+  python3 "$SPREAD_PATH"/tests/spread/lib/mock-ai-server.py 18328 &
+  MOCK_PID=$!
+  for i in $(seq 1 30); do
+    curl -sf http://127.0.0.1:18328/v3/models && break
+    sleep 0.2
+  done
+
+  # Create a passing test charm fixture.
+  CHARM_DIR=$(mktemp -d)
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+
+  export MOCK_GH_ISSUE_BODY="### Charm name
+test-charm
+
+### Demo
+https://example.com/demo
+
+### Project Repository
+file://$CHARM_DIR
+
+### CI Linting
+https://example.com/lint
+
+### CI Release
+https://example.com/release
+
+### CI Integration Tests
+https://example.com/integration
+
+### Documentation Link
+https://example.com/docs"
+
+  export MOCK_GH_COMMENTS="[]"
+  export MOCK_GH_LOG=$(mktemp)
+  export PATH="$SPREAD_PATH/tests/spread/lib/mock-gh-bin:$PATH"
+
+  output=$(CHARMHUB_REVIEW_AI_BACKEND=snap \
+    SNAP_API_URL=http://127.0.0.1:18328/v3 \
+    SNAP_MODEL=mock-model \
+    uv run --directory "$SPREAD_PATH" --group snap-ai \
+    update-issue \
+      --issue-number 99 \
+      --reviewers-file "$SPREAD_PATH"/tests/spread/lib/test-reviewers.yaml \
+      --ai-backend snap \
+      --dry-run 2>&1) || true
+
+  echo "$output"
+
+  # AI summary section should be present in the output.
+  echo "$output" | MATCH "AI Review Summary\|Mock AI response"
+
+  # The review comment should still contain the checklist.
+  echo "$output" | MATCH "test-charm"
+
+restore: |
+  if [ -f mock-ai-server.pid ]; then
+    kill "$(cat mock-ai-server.pid)" 2>/dev/null || true
+    rm -f mock-ai-server.pid
+  fi
+  kill "$MOCK_PID" 2>/dev/null || true
+  rm -rf "$CHARM_DIR" 2>/dev/null || true
+  rm -f "$MOCK_GH_LOG" 2>/dev/null || true

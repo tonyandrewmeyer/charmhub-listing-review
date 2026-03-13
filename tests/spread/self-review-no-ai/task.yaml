@@ -1,0 +1,43 @@
+summary: Self-review CLI runs against a well-formed charm without AI
+systems:
+  - ubuntu-24.04
+
+execute: |
+  pushd "${SPREAD_PATH}/${SPREAD_TASK}"
+
+  # Create a passing test charm fixture.
+  CHARM_DIR=$(mktemp -d)
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+
+  # Run self-review pointing at the local file:// repo, with no AI backend.
+  output=$(CHARMHUB_REVIEW_AI_BACKEND=none \
+    uv run --directory "$SPREAD_PATH" \
+    self-review \
+      --charm-name test-charm \
+      --repository "file://$CHARM_DIR" 2>&1) || true
+
+  echo "$output"
+
+  # Verify the tool ran and produced output for this charm.
+  echo "$output" | MATCH "test-charm"
+
+  # File-based checks should pass: icon (100x100 svg).
+  echo "$output" | MATCH "✅.*icon"
+
+  # Charm name check should pass (valid slug format).
+  echo "$output" | MATCH "✅.*charm name\|✅.*slug"
+
+  # Lock file & pyproject should pass.
+  echo "$output" | MATCH "✅.*lock file\|✅.*pyproject\|✅.*committed to version control"
+
+  # AI features should be disabled.
+  echo "$output" | MATCH "AI.*disabled\|no AI backend"
+
+  # Progress summary should be present and show passes.
+  echo "$output" | MATCH "Progress:.*passed"
+
+  # Should report 0 failed (HTTP checks fall back to manual, not failed).
+  echo "$output" | MATCH "0 failed"
+
+restore: |
+  rm -rf "$CHARM_DIR" 2>/dev/null || true

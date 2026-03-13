@@ -1,0 +1,75 @@
+summary: Self-review with a real Canonical inference snap (gemma3)
+systems:
+  - ubuntu-24.04
+
+execute: |
+  pushd "${SPREAD_PATH}/${SPREAD_TASK}"
+
+  # Install the gemma3 inference snap.
+  snap install gemma3
+
+  # Wait for the inference API to become ready (may take a few minutes on
+  # first launch while the model loads).
+  echo "Waiting for gemma3 API to become ready..."
+  for i in $(seq 1 120); do
+    if curl -sf http://127.0.0.1:8326/v3/models >/dev/null 2>&1; then
+      echo "API ready after ~${i}s"
+      break
+    fi
+    sleep 2
+  done
+
+  # Verify the API is actually responding before continuing.
+  curl -sf http://127.0.0.1:8326/v3/models
+
+  # Create a passing test charm fixture.
+  CHARM_DIR=$(mktemp -d)
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+
+  # Add a Python source file so the code review has something to analyse.
+  mkdir -p "$CHARM_DIR/src"
+  cat > "$CHARM_DIR/src/charm.py" << 'PYEOF'
+import ops
+
+class TestCharm(ops.CharmBase):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.framework.observe(self.on.install, self._on_install)
+
+    def _on_install(self, event):
+        self.unit.status = ops.ActiveStatus()
+PYEOF
+  cd "$CHARM_DIR" && git add -A && git commit -m "Add charm source" --quiet
+  cd -
+
+  # Run self-review with the real snap backend and code review enabled.
+  output=$(uv run --directory "$SPREAD_PATH" --group snap-ai \
+    self-review \
+      --charm-name test-charm \
+      --repository "file://$CHARM_DIR" \
+      --ai-backend snap \
+      --code-review 2>&1) || true
+
+  echo "$output"
+
+  # AI Review Summary should appear (real model response, not mock).
+  echo "$output" | MATCH "AI Review Summary"
+
+  # AI Documentation Assessment should appear.
+  echo "$output" | MATCH "AI Documentation Assessment"
+
+  # AI Code Quality Analysis should appear (we passed --code-review).
+  echo "$output" | MATCH "AI Code Quality Analysis"
+
+  # File-based checks should still pass.
+  echo "$output" | MATCH "✅.*icon"
+
+  # The progress line should be present.
+  echo "$output" | MATCH "Progress:.*passed"
+
+  # The AI warning should appear since we got AI output.
+  echo "$output" | MATCH "AI output is a suggestion only"
+
+restore: |
+  rm -rf "$CHARM_DIR" 2>/dev/null || true
+  snap remove gemma3 2>/dev/null || true

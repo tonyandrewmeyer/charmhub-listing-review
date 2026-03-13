@@ -1,0 +1,60 @@
+summary: update-issue --dry-run produces correct output with mock gh CLI
+systems:
+  - ubuntu-24.04
+
+execute: |
+  pushd "${SPREAD_PATH}/${SPREAD_TASK}"
+
+  # Create a passing test charm fixture.
+  CHARM_DIR=$(mktemp -d)
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+
+  # Prepare the mock issue body (mimics the GitHub issue template output).
+  export MOCK_GH_ISSUE_BODY="### Charm name
+test-charm
+
+### Demo
+https://example.com/demo
+
+### Project Repository
+file://$CHARM_DIR
+
+### CI Linting
+https://example.com/lint
+
+### CI Release
+https://example.com/release
+
+### CI Integration Tests
+https://example.com/integration
+
+### Documentation Link
+https://example.com/docs"
+
+  export MOCK_GH_COMMENTS="[]"
+  export MOCK_GH_LOG=$(mktemp)
+
+  # Put mock gh on PATH.
+  export PATH="$SPREAD_PATH/tests/spread/lib/mock-gh-bin:$PATH"
+
+  # Run update-issue in dry-run mode (no real GH interaction).
+  output=$(CHARMHUB_REVIEW_AI_BACKEND=none \
+    uv run --directory "$SPREAD_PATH" \
+    update-issue \
+      --issue-number 42 \
+      --reviewers-file "$SPREAD_PATH"/tests/spread/lib/test-reviewers.yaml \
+      --dry-run 2>&1) || true
+
+  echo "$output"
+
+  # Should contain the review checklist.
+  echo "$output" | MATCH "test-charm"
+  echo "$output" | MATCH "Reviewer"
+
+  # Mock gh should have been called for issue view.
+  cat "$MOCK_GH_LOG"
+  MATCH "gh issue view 42" < "$MOCK_GH_LOG"
+
+restore: |
+  rm -rf "$CHARM_DIR" 2>/dev/null || true
+  rm -f "$MOCK_GH_LOG" 2>/dev/null || true

@@ -1,0 +1,21 @@
+summary: Self-review handles a non-existent repository gracefully
+systems:
+  - ubuntu-24.04
+
+execute: |
+  pushd "${SPREAD_PATH}/${SPREAD_TASK}"
+
+  # Point at a non-existent local path.
+  output=$(CHARMHUB_REVIEW_AI_BACKEND=none \
+    uv run --directory "$SPREAD_PATH" \
+    self-review \
+      --charm-name test-charm \
+      --repository "file:///nonexistent/repo" 2>&1) || true
+
+  echo "$output"
+
+  # Should warn about being unable to clone / run checks.
+  echo "$output" | MATCH "Warning\|Could not\|Error\|clone"
+
+  # Should still display the checklist (with manual items).
+  echo "$output" | MATCH "manual review needed"

@@ -11,6 +11,7 @@ repos:
       - id: check-symlinks
       - id: check-json
       - id: check-yaml
+        exclude: ^tests/spread/
       - id: check-toml
       - id: mixed-line-ending
       - id: end-of-file-fixer

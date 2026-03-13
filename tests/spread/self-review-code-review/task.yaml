@@ -1,0 +1,58 @@
+summary: Self-review with --code-review flag uses mock AI for code analysis
+systems:
+  - ubuntu-24.04
+
+execute: |
+  pushd "${SPREAD_PATH}/${SPREAD_TASK}"
+
+  # Start the mock AI server.
+  python3 "$SPREAD_PATH"/tests/spread/lib/mock-ai-server.py 18327 &
+  MOCK_PID=$!
+  for i in $(seq 1 30); do
+    curl -sf http://127.0.0.1:18327/v3/models && break
+    sleep 0.2
+  done
+
+  # Create a passing test charm with some Python source for code review.
+  CHARM_DIR=$(mktemp -d)
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+
+  # Add a Python source file so the code review has something to analyse.
+  mkdir -p "$CHARM_DIR/src"
+  cat > "$CHARM_DIR/src/charm.py" << 'PYEOF'
+import ops
+
+class TestCharm(ops.CharmBase):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.framework.observe(self.on.install, self._on_install)
+
+    def _on_install(self, event):
+        self.unit.status = ops.ActiveStatus()
+PYEOF
+  cd "$CHARM_DIR" && git add -A && git commit -m "Add charm source" --quiet
+  cd -
+
+  # Run with --code-review.
+  output=$(CHARMHUB_REVIEW_AI_BACKEND=snap \
+    SNAP_API_URL=http://127.0.0.1:18327/v3 \
+    SNAP_MODEL=mock-model \
+    uv run --directory "$SPREAD_PATH" --group snap-ai \
+    self-review \
+      --charm-name test-charm \
+      --repository "file://$CHARM_DIR" \
+      --ai-backend snap \
+      --code-review 2>&1) || true
+
+  echo "$output"
+
+  # Code quality analysis section should appear.
+  echo "$output" | MATCH "Code Quality Analysis\|Mock AI response"
+
+restore: |
+  if [ -f mock-ai-server.pid ]; then
+    kill "$(cat mock-ai-server.pid)" 2>/dev/null || true
+    rm -f mock-ai-server.pid
+  fi
+  kill "$MOCK_PID" 2>/dev/null || true
+  rm -rf "$CHARM_DIR" 2>/dev/null || true

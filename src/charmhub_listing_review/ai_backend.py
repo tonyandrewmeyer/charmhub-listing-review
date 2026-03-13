@@ -72,6 +72,9 @@ def resolve_backend(choice: str = 'auto') -> AIBackend | None:
     if choice == 'auto':
         choice = os.environ.get('CHARMHUB_REVIEW_AI_BACKEND', 'auto')
 
+    if choice == 'none':
+        return None
+
     if choice == 'copilot':
         from . import copilot_backend
 
