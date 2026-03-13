@@ -301,9 +301,9 @@ def main():
     )
     parser.add_argument(
         '--ai-backend',
-        choices=['copilot', 'snap', 'auto'],
+        choices=['copilot', 'snap', 'auto', 'none'],
         default='auto',
-        help='AI backend to use (default: auto)',
+        help="AI backend to use (default: auto; use 'none' to disable AI)",
     )
 
     args = parser.parse_args()
