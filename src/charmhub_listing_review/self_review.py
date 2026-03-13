@@ -210,25 +210,25 @@ def print_self_review_results(
             print('-' * 40)
             print(ai_summary)
 
-        if doc_context:
-            try:
-                doc_assessment = asyncio.run(assess_documentation(doc_context))
-                if doc_assessment:
-                    print('\n\033[1m📄 AI Documentation Assessment\033[0m')
-                    print('-' * 40)
-                    print(doc_assessment)
-            except Exception:  # noqa: S110
-                pass
+    if is_ai_available() and doc_context:
+        try:
+            doc_assessment = asyncio.run(assess_documentation(doc_context))
+            if doc_assessment:
+                print('\n\033[1m📄 AI Documentation Assessment\033[0m')
+                print('-' * 40)
+                print(doc_assessment)
+        except Exception:  # noqa: S110
+            pass
 
-        if charmcraft_data:
-            try:
-                meta_assessment = asyncio.run(assess_metadata(charmcraft_data))
-                if meta_assessment:
-                    print('\n\033[1m📝 AI Metadata Assessment\033[0m')
-                    print('-' * 40)
-                    print(meta_assessment)
-            except Exception:  # noqa: S110
-                pass
+    if is_ai_available() and charmcraft_data:
+        try:
+            meta_assessment = asyncio.run(assess_metadata(charmcraft_data))
+            if meta_assessment:
+                print('\n\033[1m📝 AI Metadata Assessment\033[0m')
+                print('-' * 40)
+                print(meta_assessment)
+        except Exception:  # noqa: S110
+            pass
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')
     print('\n📋 To submit your charm for official review, create an issue at:')

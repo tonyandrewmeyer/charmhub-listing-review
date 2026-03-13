@@ -18,7 +18,8 @@ import asyncio
 from unittest import mock
 
 import charmhub_listing_review.ai_client as ai_client
-from charmhub_listing_review.evaluate import CheckResult
+from charmhub_listing_review.ai_client import assess_documentation, assess_metadata
+from charmhub_listing_review.evaluate import CheckResult, _gather_doc_context
 from charmhub_listing_review.self_review import format_checklist_for_console
 
 
@@ -153,8 +154,6 @@ def test_generate_summary():
 
 def test_assess_documentation_sanitises_output():
     """assess_documentation strips dangerous content from LLM output."""
-    from charmhub_listing_review.ai_client import assess_documentation
-
     malicious_response = (
         'Looks good! Visit <script>alert(1)</script> or '
         '[click here](https://evil.example.com) for more.'
@@ -183,8 +182,6 @@ def test_assess_documentation_sanitises_output():
 
 def test_assess_metadata_sanitises_output():
     """assess_metadata strips dangerous content from LLM output."""
-    from charmhub_listing_review.ai_client import assess_metadata
-
     malicious_response = '- Title: ![tracker](https://evil.example.com/pixel.png) OK'
     charmcraft_data = {'name': 'my-charm', 'title': 'My Charm'}
 
@@ -208,8 +205,6 @@ def test_assess_metadata_sanitises_output():
 
 
 def test_assess_documentation():
-    from charmhub_listing_review.ai_client import assess_documentation
-
     doc_context = {
         'readme_content': '# My Charm\nA charm for things.',
         'doc_files': ['docs/tutorial.md', 'docs/reference.md'],
@@ -238,8 +233,6 @@ def test_assess_documentation():
 
 
 def test_assess_metadata():
-    from charmhub_listing_review.ai_client import assess_metadata
-
     charmcraft_data = {
         'name': 'my-charm',
         'title': 'My Charm',
@@ -268,15 +261,11 @@ def test_assess_metadata():
 
 
 def test_assess_metadata_empty():
-    from charmhub_listing_review.ai_client import assess_metadata
-
     result = asyncio.run(assess_metadata({}))
     assert result == ''
 
 
 def test_gather_doc_context(tmp_path):
-    from charmhub_listing_review.evaluate import _gather_doc_context
-
     readme = tmp_path / 'README.md'
     readme.write_text('# My Charm\nSome docs here.')
     docs_dir = tmp_path / 'docs'
@@ -292,8 +281,6 @@ def test_gather_doc_context(tmp_path):
 
 
 def test_gather_doc_context_no_docs(tmp_path):
-    from charmhub_listing_review.evaluate import _gather_doc_context
-
     ctx = _gather_doc_context(tmp_path, None)
     assert 'readme_content' not in ctx
     assert 'doc_files' not in ctx

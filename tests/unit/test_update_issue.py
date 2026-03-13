@@ -19,7 +19,7 @@ import pathlib
 from unittest import mock
 
 import charmhub_listing_review.update_issue as update_issue
-from charmhub_listing_review.evaluate import CheckResult
+from charmhub_listing_review.evaluate import CheckResult, EvaluationResult
 
 
 @mock.patch('random.choice')
@@ -203,8 +203,6 @@ def _make_issue_data(**overrides):
 
 def _make_evaluation(checks):
     """Create a mock EvaluationResult with the given checks."""
-    from charmhub_listing_review.evaluate import EvaluationResult
-
     return EvaluationResult(checks=checks)
 
 
