@@ -4,6 +4,7 @@ workers: 1
 
 environment:
   CI: "$(HOST: echo $CI)"
+  UV_PYTHON_PREFERENCE: only-system
 
 backends:
   lxd:
@@ -84,11 +85,10 @@ prepare: |
     systemctl mask unattended-upgrades.service
   fi
 
-  # Install uv if not present.
-  if ! command -v uv &>/dev/null; then
-    snap install astral-uv --classic
-  fi
+  sudo snap install astral-uv --classic
 
   pushd "$SPREAD_PATH"
-  uv python install
-  uv sync
+  uv sync --python python3
+
+restore: |
+  rm -rf "$SPREAD_PATH/.venv"
