@@ -40,7 +40,7 @@ from typing import TypedDict, cast
 
 import yaml
 
-from .evaluate import evaluate
+from .evaluate import evaluate, get_default_branch
 from .sphinx_refs import convert_sphinx_refs
 
 BEST_PRACTICE_SOURCE = 'https://raw.githubusercontent.com/canonical/operator/refs/heads/main/docs/reuse/best-practices.txt'
@@ -144,6 +144,7 @@ class _IssueData(TypedDict):
     ci_release_url: str
     ci_integration_url: str
     documentation_link: str
+    default_branch: str
     contribution_link: str
     license_link: str
     security_link: str
@@ -174,6 +175,7 @@ def get_details_from_issue(issue_number: int, repo: str | None = None):
         'ci_release_url': '### CI Release',
         'ci_integration_url': '### CI Integration Tests',
         'documentation_link': '### Documentation Link',
+        'default_branch': '### Review Branch',
     }
 
     # Extract values for each field.
@@ -190,9 +192,15 @@ def get_details_from_issue(issue_number: int, repo: str | None = None):
     # These have expected filenames, so we use those rather than require the author provide them.
     # This is quite specific to GitHub, but we can add support for other platforms if required,
     # and if they aren't found then the reviewer just has to locate them themselves.
-    issue_data['contribution_link'] = f'{issue_data["project_repo"]}/blob/main/CONTRIBUTING.md'
-    issue_data['license_link'] = f'{issue_data["project_repo"]}/blob/main/LICENSE'
-    issue_data['security_link'] = f'{issue_data["project_repo"]}/blob/main/SECURITY.md'
+    default_branch = issue_data.get('default_branch') or get_default_branch(
+        issue_data['project_repo']
+    )
+    issue_data['default_branch'] = default_branch
+    issue_data['contribution_link'] = (
+        f'{issue_data["project_repo"]}/blob/{default_branch}/CONTRIBUTING.md'
+    )
+    issue_data['license_link'] = f'{issue_data["project_repo"]}/blob/{default_branch}/LICENSE'
+    issue_data['security_link'] = f'{issue_data["project_repo"]}/blob/{default_branch}/SECURITY.md'
 
     return cast('_IssueData', issue_data)
 
@@ -330,6 +338,7 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['contribution_link'],
         issue_data['license_link'],
         issue_data['security_link'],
+        issue_data['default_branch'],
     )
     for result in results:
         # Convert Sphinx refs in the result to match the converted comment.

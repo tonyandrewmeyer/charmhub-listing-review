@@ -14,11 +14,58 @@
 
 """Test the automated criteria evaluation."""
 
+import subprocess  # noqa: S404
 from unittest import mock
 
 import pytest
 
 import charmhub_listing_review.evaluate as evaluate
+
+
+class TestGetDefaultBranch:
+    @mock.patch('subprocess.run')
+    def test_detects_main(self, mock_run):
+        mock_run.return_value = mock.Mock(stdout='ref: refs/heads/main\tHEAD\nabc123\tHEAD\n')
+        assert evaluate.get_default_branch('https://github.com/org/repo') == 'main'
+
+    @mock.patch('subprocess.run')
+    def test_detects_master(self, mock_run):
+        mock_run.return_value = mock.Mock(stdout='ref: refs/heads/master\tHEAD\nabc123\tHEAD\n')
+        assert evaluate.get_default_branch('https://github.com/org/repo') == 'master'
+
+    @mock.patch('subprocess.run')
+    def test_detects_custom_branch(self, mock_run):
+        mock_run.return_value = mock.Mock(stdout='ref: refs/heads/26.04\tHEAD\nabc123\tHEAD\n')
+        assert evaluate.get_default_branch('https://github.com/org/repo') == '26.04'
+
+    @mock.patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'git'))
+    def test_falls_back_to_main_on_error(self, mock_run):
+        assert evaluate.get_default_branch('https://github.com/org/repo') == 'main'
+
+    @mock.patch('subprocess.run', side_effect=subprocess.TimeoutExpired('git', 5))
+    def test_falls_back_to_main_on_timeout(self, mock_run):
+        assert evaluate.get_default_branch('https://github.com/org/repo') == 'main'
+
+
+class TestCloneRepo:
+    @mock.patch('subprocess.run')
+    def test_clone_without_branch(self, mock_run):
+        evaluate._clone_repo('https://github.com/org/repo')
+        cmd = mock_run.call_args[0][0]
+        assert '--branch' not in cmd
+
+    @mock.patch('subprocess.run')
+    def test_clone_with_branch(self, mock_run):
+        evaluate._clone_repo('https://github.com/org/repo', branch='develop')
+        cmd = mock_run.call_args[0][0]
+        assert '--branch' in cmd
+        assert cmd[cmd.index('--branch') + 1] == 'develop'
+
+    @mock.patch('subprocess.run')
+    def test_clone_with_empty_branch(self, mock_run):
+        evaluate._clone_repo('https://github.com/org/repo', branch='')
+        cmd = mock_run.call_args[0][0]
+        assert '--branch' not in cmd
 
 
 @pytest.mark.parametrize(

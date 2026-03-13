@@ -31,6 +31,8 @@ tox -e format
 pre-commit install
 ```
 
+Avoid using `head` and `tail` with these commands, as that masks issues.
+
 ## Code Architecture
 
 ### Entry Points (defined in pyproject.toml)

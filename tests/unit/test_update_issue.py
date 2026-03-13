@@ -134,8 +134,9 @@ def test_assign_to_dry_run_does_not_call_gh(mock_subprocess_run):
         assert '--add-assignee' not in args
 
 
+@mock.patch('charmhub_listing_review.update_issue.get_default_branch', return_value='main')
 @mock.patch('subprocess.run')
-def test_get_details_from_issue(mock_subprocess_run):
+def test_get_details_from_issue(mock_subprocess_run, mock_get_default_branch):
     issue_body = """
 ### Charm name
 my-charm
@@ -167,6 +168,7 @@ https://docs.example.com
     assert details['ci_release_url'] == 'https://ci.example.com/release'
     assert details['ci_integration_url'] == 'https://ci.example.com/integration'
     assert details['documentation_link'] == 'https://docs.example.com'
+    assert details['default_branch'] == 'main'
     assert (
         details['contribution_link']
         == 'https://github.com/canonical/my-charm/blob/main/CONTRIBUTING.md'
@@ -175,6 +177,49 @@ https://docs.example.com
     assert (
         details['security_link'] == 'https://github.com/canonical/my-charm/blob/main/SECURITY.md'
     )
+    mock_get_default_branch.assert_called_once_with('https://github.com/canonical/my-charm')
+
+
+@mock.patch('charmhub_listing_review.update_issue.get_default_branch')
+@mock.patch('subprocess.run')
+def test_get_details_from_issue_with_explicit_branch(mock_subprocess_run, mock_get_default_branch):
+    issue_body = """
+### Charm name
+my-charm
+
+### Demo
+https://demo.example.com
+
+### Project Repository
+https://github.com/canonical/my-charm
+
+### CI Linting
+https://ci.example.com/lint
+
+### CI Release
+https://ci.example.com/release
+
+### CI Integration Tests
+https://ci.example.com/integration
+
+### Documentation Link
+https://docs.example.com
+
+### Review Branch
+26.04
+"""
+    mock_subprocess_run.return_value = mock.Mock(stdout=json.dumps({'body': issue_body}))
+    details = update_issue.get_details_from_issue(123)
+    assert details['default_branch'] == '26.04'
+    assert (
+        details['contribution_link']
+        == 'https://github.com/canonical/my-charm/blob/26.04/CONTRIBUTING.md'
+    )
+    assert details['license_link'] == 'https://github.com/canonical/my-charm/blob/26.04/LICENSE'
+    assert (
+        details['security_link'] == 'https://github.com/canonical/my-charm/blob/26.04/SECURITY.md'
+    )
+    mock_get_default_branch.assert_not_called()
 
 
 def test_issue_summary():
