@@ -138,7 +138,7 @@ class SnapBackend:
             )
             with urllib.request.urlopen(req, timeout=2) as resp:  # noqa: S310
                 return resp.status == 200
-        except (urllib.error.URLError, OSError, TimeoutError):
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError, OverflowError):
             return False
 
     async def _discover_model(self) -> str:
