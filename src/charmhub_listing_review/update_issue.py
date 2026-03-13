@@ -41,7 +41,7 @@ from typing import TypedDict, cast
 
 import yaml
 
-from .ai_client import explain_failures, is_ai_available
+from .ai_client import explain_and_summarise, is_ai_available
 from .evaluate import evaluate
 from .sphinx_refs import convert_sphinx_refs
 
@@ -320,7 +320,7 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
     """Adjust the comment to tick items based on automated checks.
 
     If the Copilot SDK is available, also adds AI-generated explanations
-    as sub-bullets under failed checklist items.
+    as sub-bullets under failed checklist items, and prepends an AI summary.
     """
     results = evaluate(
         issue_data['name'],
@@ -331,11 +331,12 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['security_link'],
     )
 
+    ai_summary = ''
     if is_ai_available():
         try:
-            results = asyncio.run(explain_failures(results))
+            results, ai_summary = asyncio.run(explain_and_summarise(issue_data['name'], results))
         except Exception:  # noqa: S110
-            pass  # AI explanations are optional; ignore errors and use original results.
+            pass  # AI features are best-effort.
 
     ai_explanations_added = False
     for result in results:
@@ -355,6 +356,12 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
             '> AI output is a suggestion only. '
             'AI makes mistakes — please check the AI responses carefully before acting on them.'
         )
+
+    if ai_summary:
+        summary_block = (
+            f'<details>\n<summary>AI Review Summary</summary>\n\n{ai_summary}\n\n</details>\n\n'
+        )
+        comment = summary_block + comment
     return comment
 
 

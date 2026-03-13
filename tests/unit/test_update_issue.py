@@ -238,7 +238,7 @@ def test_apply_automated_checks_ai_explanation():
 
 
 def test_apply_automated_checks_ai_disabled():
-    """apply_automated_checks does not call explain_failures when AI is unavailable."""
+    """apply_automated_checks does not call explain_and_summarise when AI is unavailable."""
     result = CheckResult(
         name='license',
         passed=False,
@@ -249,14 +249,14 @@ def test_apply_automated_checks_ai_disabled():
     with (
         mock.patch('charmhub_listing_review.update_issue.evaluate', return_value=[result]),
         mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=False),
-        mock.patch('charmhub_listing_review.update_issue.explain_failures') as mock_explain,
+        mock.patch('charmhub_listing_review.update_issue.explain_and_summarise') as mock_ai,
     ):
         update_issue.apply_automated_checks(_make_issue_data(), comment)
-    mock_explain.assert_not_called()
+    mock_ai.assert_not_called()
 
 
 def test_apply_automated_checks_ai_error_is_graceful():
-    """apply_automated_checks still succeeds when explain_failures raises."""
+    """apply_automated_checks still succeeds when explain_and_summarise raises."""
     result = CheckResult(
         name='license',
         passed=False,
@@ -268,10 +268,12 @@ def test_apply_automated_checks_ai_error_is_graceful():
         mock.patch('charmhub_listing_review.update_issue.evaluate', return_value=[result]),
         mock.patch('charmhub_listing_review.update_issue.is_ai_available', return_value=True),
         mock.patch(
-            'charmhub_listing_review.update_issue.explain_failures',
+            'charmhub_listing_review.update_issue.asyncio.run',
             side_effect=RuntimeError('Copilot auth failed'),
         ),
     ):
         # Should not raise — AI errors are swallowed.
         output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    # The check result is still applied, but no AI content is added.
     assert '* [x] The charm provides a license statement.' in output
+    assert 'AI' not in output

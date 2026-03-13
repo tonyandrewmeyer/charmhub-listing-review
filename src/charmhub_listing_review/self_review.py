@@ -34,7 +34,7 @@ import asyncio
 import sys
 import textwrap
 
-from .ai_client import explain_failures, is_ai_available
+from .ai_client import explain_and_summarise, is_ai_available
 from .evaluate import CheckResult, evaluate
 from .sphinx_refs import convert_sphinx_refs
 from .update_issue import issue_comment
@@ -161,17 +161,18 @@ def print_self_review_results(
             else:
                 print(f'   Error details: {e}')
 
-        # Run AI explanations for failed checks (best-effort, separate from evaluate).
+        # Run AI explanations and summary in a single event loop (best-effort).
+        ai_summary = ''
         if results and is_ai_available():
             try:
-                results = asyncio.run(explain_failures(results))
+                results, ai_summary = asyncio.run(explain_and_summarise(charm_name, results))
                 for result in results:
                     if result.ai_explanation:
                         description = convert_sphinx_refs(result.description)
                         unchecked_key = description.replace('* [x]', '* [ ]')
                         ai_explanations[unchecked_key] = result.ai_explanation
             except Exception:  # noqa: S110
-                pass  # AI explanations are best-effort; don't disrupt the output.
+                pass  # AI features are best-effort; don't disrupt the output.
 
     formatted_checklist = format_checklist_for_console(comment, ai_explanations)
     print(formatted_checklist)
@@ -191,6 +192,13 @@ def print_self_review_results(
         f'\n\033[1m📊 Progress: {completed_count} passed, {failed_count} failed, '
         f'{unknown_count} manual review needed\033[0m'
     )
+
+    # Print AI review summary if generated.
+    if results and is_ai_available() and ai_summary:
+        print('\n\033[1m🤖 AI Review Summary\033[0m')
+        print('-' * 40)
+        print(ai_summary)
+
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')
     print('\n📋 To submit your charm for official review, create an issue at:')
