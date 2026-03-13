@@ -28,10 +28,10 @@ import hashlib
 import pathlib
 import re
 import shutil
-import subprocess
+import subprocess  # noqa: S404
 import tempfile
 import tomllib
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # noqa: S405
 from typing import Any
 
 import requests
