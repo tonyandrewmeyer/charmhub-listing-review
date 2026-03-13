@@ -204,11 +204,10 @@ def print_self_review_results(
     )
 
     # Print AI-driven outputs when available.
-    if results and is_ai_available():
-        if ai_summary:
-            print('\n\033[1m🤖 AI Review Summary\033[0m')
-            print('-' * 40)
-            print(ai_summary)
+    if results and is_ai_available() and ai_summary:
+        print('\n\033[1m🤖 AI Review Summary\033[0m')
+        print('-' * 40)
+        print(ai_summary)
 
     if is_ai_available() and doc_context:
         try:
