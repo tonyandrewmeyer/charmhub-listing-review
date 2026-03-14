@@ -48,7 +48,7 @@ execute: |
   cd -
 
   # Run self-review with the real snap backend and code review enabled.
-  output=$(uv run --directory "$SPREAD_PATH" --group snap-ai \
+  output=$(uv run --directory "$SPREAD_PATH" \
     self-review \
       --charm-name test-charm \
       --repository "file://$CHARM_DIR" \

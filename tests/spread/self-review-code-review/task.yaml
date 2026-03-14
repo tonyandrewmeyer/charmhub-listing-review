@@ -37,7 +37,7 @@ execute: |
   output=$(CHARMHUB_REVIEW_AI_BACKEND=snap \
     SNAP_API_URL=http://127.0.0.1:18327/v3 \
     SNAP_MODEL=mock-model \
-    uv run --directory "$SPREAD_PATH" --group snap-ai \
+    uv run --directory "$SPREAD_PATH" \
     self-review \
       --charm-name test-charm \
       --repository "file://$CHARM_DIR" \

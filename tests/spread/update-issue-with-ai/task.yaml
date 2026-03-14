@@ -45,7 +45,7 @@ execute: |
   output=$(CHARMHUB_REVIEW_AI_BACKEND=snap \
     SNAP_API_URL=http://127.0.0.1:18328/v3 \
     SNAP_MODEL=mock-model \
-    uv run --directory "$SPREAD_PATH" --group snap-ai \
+    uv run --directory "$SPREAD_PATH" \
     update-issue \
       --issue-number 99 \
       --reviewers-file "$SPREAD_PATH"/tests/spread/lib/test-reviewers.yaml \

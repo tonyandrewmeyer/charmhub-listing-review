@@ -88,7 +88,17 @@ prepare: |
   sudo snap install astral-uv --classic
 
   pushd "$SPREAD_PATH"
-  uv sync --python python3
+  uv venv
+  uv pip install -e . openai
+
+  # Diagnostics: verify entry points are spawnable.
+  echo "=== Spread prepare diagnostics ==="
+  whoami
+  which python3
+  ls -la .venv/bin/self-review .venv/bin/python3
+  head -1 .venv/bin/self-review
+  readlink -f .venv/bin/python3
+  .venv/bin/self-review --help
 
 restore: |
   rm -rf "$SPREAD_PATH/.venv"
