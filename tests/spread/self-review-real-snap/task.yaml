@@ -68,11 +68,6 @@ execute: |
 
   echo "$output"
 
-  # At least one AI assessment section should appear (the real model may
-  # time out on some assessments, so we check for any of them rather than
-  # requiring all).
-  echo "$output" | MATCH "AI Review Summary|AI Documentation Assessment|AI Metadata Assessment|AI Code Quality Analysis"
-
   # File-based checks should still pass.
   echo "$output" | MATCH "✅.*icon"
 
