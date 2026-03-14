@@ -89,7 +89,7 @@ prepare: |
 
   pushd "$SPREAD_PATH"
   uv venv
-  uv pip install -e . openai
+  uv pip install -e . openai tox tox-uv
 
   # Diagnostics: verify entry points are spawnable.
   echo "=== Spread prepare diagnostics ==="

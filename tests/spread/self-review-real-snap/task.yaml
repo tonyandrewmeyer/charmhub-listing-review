@@ -11,12 +11,19 @@ execute: |
 
   # Wait for the inference API to become ready (the model is large and may
   # take 5-10 minutes to load on a standard CI runner without a GPU).
+  # Probe the same ports and paths that the snap backend auto-discovers.
   echo "Waiting for gemma3 API to become ready..."
+  API_READY=0
   for i in $(seq 1 300); do
-    if curl -sf http://127.0.0.1:8326/v3/models >/dev/null 2>&1; then
-      echo "API ready after ~$((i * 2))s"
-      break
-    fi
+    for port in 8326 8327 8328 8329 8330; do
+      for base in /v3 /v1; do
+        if curl -sf "http://127.0.0.1:${port}${base}/models" >/dev/null 2>&1; then
+          echo "API ready on port ${port}${base} after ~$((i * 2))s"
+          API_READY=1
+          break 3
+        fi
+      done
+    done
     if [ $((i % 30)) -eq 0 ]; then
       echo "Still waiting after ~$((i * 2))s..."
       gemma3 status || true
@@ -25,7 +32,11 @@ execute: |
   done
 
   # Verify the API is actually responding before continuing.
-  curl -sf http://127.0.0.1:8326/v3/models
+  if [ "$API_READY" -ne 1 ]; then
+    echo "ERROR: gemma3 API did not become ready within 10 minutes"
+    gemma3 status || true
+    exit 1
+  fi
 
   # Create a passing test charm fixture.
   CHARM_DIR=$(mktemp -d)
