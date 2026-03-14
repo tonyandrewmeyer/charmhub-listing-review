@@ -15,7 +15,7 @@ execute: |
   echo "$output"
 
   # Should warn about being unable to clone / run checks.
-  echo "$output" | MATCH "Warning\|Could not\|Error\|clone"
+  echo "$output" | MATCH "Warning|Could not|Error|clone"
 
   # Should still display the checklist (with manual items).
   echo "$output" | MATCH "manual review needed"

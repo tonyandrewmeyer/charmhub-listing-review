@@ -23,7 +23,7 @@ execute: |
   echo "$output" | MATCH "8 failed"
 
   # Charm name should fail (uppercase, underscores).
-  echo "$output" | MATCH "❌.*charm name\|❌.*slug"
+  echo "$output" | MATCH "❌.*charm name|❌.*slug"
 
   # Action names should fail (Do_Something has underscores/uppercase).
   echo "$output" | MATCH "❌.*action"
@@ -35,7 +35,7 @@ execute: |
   echo "$output" | MATCH "❌.*icon"
 
   # Lock file should fail.
-  echo "$output" | MATCH "❌.*lock file\|❌.*committed to version control"
+  echo "$output" | MATCH "❌.*lock file|❌.*committed to version control"
 
   # pyproject requires-python should fail.
   echo "$output" | MATCH "❌.*requires-python"

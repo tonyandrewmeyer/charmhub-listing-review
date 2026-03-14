@@ -47,7 +47,7 @@ execute: |
   echo "$output"
 
   # Code quality analysis section should appear.
-  echo "$output" | MATCH "Code Quality Analysis\|Mock AI response"
+  echo "$output" | MATCH "Code Quality Analysis|Mock AI response"
 
 restore: |
   if [ -f mock-ai-server.pid ]; then

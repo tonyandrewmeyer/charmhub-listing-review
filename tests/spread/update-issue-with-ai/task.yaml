@@ -55,7 +55,7 @@ execute: |
   echo "$output"
 
   # AI summary section should be present in the output.
-  echo "$output" | MATCH "AI Review Summary\|Mock AI response"
+  echo "$output" | MATCH "AI Review Summary|Mock AI response"
 
   # The review comment should still contain the checklist.
   echo "$output" | MATCH "test-charm"

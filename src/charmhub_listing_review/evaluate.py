@@ -606,7 +606,7 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> CheckResult:
     for command in commands_to_run:
         try:
             subprocess.check_output(command)
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             context['failed_command'] = command
             return CheckResult(
                 name='charmcraft_tooling', passed=False, description=description, context=context

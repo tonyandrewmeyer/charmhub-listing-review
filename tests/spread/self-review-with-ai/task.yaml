@@ -32,7 +32,7 @@ execute: |
   echo "$output"
 
   # AI features should have run (mock responses present).
-  echo "$output" | MATCH "AI Review Summary\|Mock AI response"
+  echo "$output" | MATCH "AI Review Summary|Mock AI response"
 
   # The tool should still show check results.
   echo "$output" | MATCH "passed"
