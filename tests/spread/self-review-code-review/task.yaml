@@ -49,6 +49,10 @@ execute: |
   # Code quality analysis section should appear.
   echo "$output" | MATCH "Code Quality Analysis|Mock AI response"
 
+  # Kill the mock server so the script does not hang waiting for it.
+  kill "$MOCK_PID" 2>/dev/null || true
+  wait "$MOCK_PID" 2>/dev/null || true
+
 restore: |
   if [ -f mock-ai-server.pid ]; then
     kill "$(cat mock-ai-server.pid)" 2>/dev/null || true
