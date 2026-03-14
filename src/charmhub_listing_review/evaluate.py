@@ -594,11 +594,17 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> CheckResult:
                 if command != 'integration':
                     commands_to_run.append(['make' if filename == 'Makefile' else 'just', command])
     elif filename == 'tox.ini':
+        if shutil.which('tox'):
+            tox_cmd = ['tox']
+        elif shutil.which('uvx'):
+            tox_cmd = ['uvx', '--with', 'tox-uv', 'tox']
+        else:
+            tox_cmd = ['tox']
         for command in commands:
             if f'[testenv:{command}]' in content:
                 found_commands.add(command)
                 if command != 'integration':
-                    commands_to_run.append(['tox', '-e', command])
+                    commands_to_run.append([*tox_cmd, '-e', command])
 
     context['found_commands'] = sorted(found_commands)
     context['missing_commands'] = sorted(commands - found_commands)
