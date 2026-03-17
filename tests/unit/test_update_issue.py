@@ -19,6 +19,7 @@ import pathlib
 from unittest import mock
 
 import charmhub_listing_review.update_issue as update_issue
+from charmhub_listing_review.evaluate import CheckResult, EvaluationResult
 
 
 @mock.patch('random.choice')
@@ -181,3 +182,119 @@ def test_issue_summary():
     name = 'my-charm'
     summary = update_issue.issue_summary(name)
     assert summary == 'Review `my-charm` for public listing on Charmhub'
+
+
+def _make_issue_data(**overrides):
+    defaults = {
+        'name': 'my-charm',
+        'demo_url': 'https://demo.example.com',
+        'project_repo': 'https://github.com/canonical/my-charm',
+        'ci_linting': 'https://ci.example.com/lint',
+        'ci_release_url': 'https://ci.example.com/release',
+        'ci_integration_url': 'https://ci.example.com/integration',
+        'documentation_link': 'https://docs.example.com',
+        'contribution_link': 'https://github.com/canonical/my-charm/blob/main/CONTRIBUTING.md',
+        'license_link': 'https://github.com/canonical/my-charm/blob/main/LICENSE',
+        'security_link': 'https://github.com/canonical/my-charm/blob/main/SECURITY.md',
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+def _make_evaluation(checks):
+    """Create a mock EvaluationResult with the given checks."""
+    return EvaluationResult(checks=checks)
+
+
+def test_apply_automated_checks_ticks_passed():
+    """apply_automated_checks replaces unchecked items with checked for passing results."""
+    result = CheckResult(
+        name='license',
+        passed=True,
+        description='* [x] The charm provides a license statement.',
+        context={},
+    )
+    comment = '* [ ] The charm provides a license statement.'
+    with (
+        mock.patch(
+            'charmhub_listing_review.update_issue.evaluate',
+            return_value=_make_evaluation([result]),
+        ),
+        mock.patch('charmhub_listing_review.update_issue.resolve_backend', return_value=None),
+    ):
+        output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    assert '* [x] The charm provides a license statement.' in output
+
+
+def test_apply_automated_checks_ai_explanation():
+    """apply_automated_checks adds AI explanation sub-bullets for failed checks."""
+    result = CheckResult(
+        name='license',
+        passed=False,
+        description='* [x] The charm provides a license statement.',
+        context={},
+        ai_explanation='The LICENSE file was not recognised.',
+    )
+    comment = '* [ ] The charm provides a license statement.'
+    with (
+        mock.patch(
+            'charmhub_listing_review.update_issue.evaluate',
+            return_value=_make_evaluation([result]),
+        ),
+        mock.patch('charmhub_listing_review.update_issue.resolve_backend', return_value=None),
+    ):
+        output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    assert '_AI: The LICENSE file was not recognised._' in output
+    assert 'AI output is a suggestion only' in output
+
+
+def test_apply_automated_checks_ai_disabled():
+    """apply_automated_checks does not call explain_and_summarise when AI is unavailable."""
+    result = CheckResult(
+        name='license',
+        passed=False,
+        description='* [x] The charm provides a license statement.',
+        context={},
+    )
+    comment = '* [ ] The charm provides a license statement.'
+    with (
+        mock.patch(
+            'charmhub_listing_review.update_issue.evaluate',
+            return_value=_make_evaluation([result]),
+        ),
+        mock.patch('charmhub_listing_review.update_issue.resolve_backend', return_value=None),
+        mock.patch('charmhub_listing_review.update_issue.explain_and_summarise') as mock_ai,
+    ):
+        update_issue.apply_automated_checks(_make_issue_data(), comment)
+    mock_ai.assert_not_called()
+
+
+def test_apply_automated_checks_ai_error_is_graceful():
+    """apply_automated_checks still succeeds when explain_and_summarise raises."""
+    result = CheckResult(
+        name='license',
+        passed=False,
+        description='* [x] The charm provides a license statement.',
+        context={},
+    )
+    comment = '* [ ] The charm provides a license statement.'
+
+    mock_backend = mock.Mock()
+    with (
+        mock.patch(
+            'charmhub_listing_review.update_issue.evaluate',
+            return_value=_make_evaluation([result]),
+        ),
+        mock.patch(
+            'charmhub_listing_review.update_issue.resolve_backend', return_value=mock_backend
+        ),
+        mock.patch(
+            'charmhub_listing_review.update_issue.explain_and_summarise',
+            side_effect=RuntimeError('Backend auth failed'),
+        ),
+    ):
+        # Should not raise — AI errors are swallowed.
+        output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    # The check result is still applied, but no AI content is added.
+    assert '* [x] The charm provides a license statement.' in output
+    assert 'AI' not in output

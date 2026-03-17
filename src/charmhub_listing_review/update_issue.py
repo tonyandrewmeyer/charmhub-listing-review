@@ -29,6 +29,7 @@ created issue to be user-friendly, and to include the current checklist.
 """
 
 import argparse
+import asyncio
 import json
 import pathlib
 import random
@@ -40,6 +41,13 @@ from typing import TypedDict, cast
 
 import yaml
 
+from .ai_backend import resolve_backend
+from .ai_client import (
+    assess_documentation,
+    assess_metadata,
+    explain_and_summarise,
+)
+from .ai_code_review import analyse_code
 from .evaluate import evaluate
 from .sphinx_refs import convert_sphinx_refs
 
@@ -321,21 +329,103 @@ review within the next three working days.
         subprocess.run(cmd, check=True)
 
 
-def apply_automated_checks(issue_data: _IssueData, comment: str):
-    """Adjust the comment to tick items based on automated checks."""
-    results = evaluate(
+def apply_automated_checks(issue_data: _IssueData, comment: str, ai_backend_choice: str = 'auto'):
+    """Adjust the comment to tick items based on automated checks.
+
+    If an AI backend is available, also adds AI-generated explanations
+    as sub-bullets under failed checklist items, and prepends an AI summary.
+    """
+    backend = resolve_backend(ai_backend_choice)
+
+    evaluation = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
         issue_data['ci_linting'],
         issue_data['contribution_link'],
         issue_data['license_link'],
         issue_data['security_link'],
+        collect_code=backend is not None,
     )
+    results = evaluation.checks
+
+    ai_summary = ''
+    ai_doc_assessment = ''
+    ai_meta_assessment = ''
+    ai_code_analysis = ''
+    if backend is not None:
+        try:
+            results, ai_summary = asyncio.run(
+                explain_and_summarise(backend, issue_data['name'], results)
+            )
+        except Exception:  # noqa: S110
+            pass  # AI features are best-effort.
+        if evaluation.doc_context:
+            try:
+                ai_doc_assessment = asyncio.run(
+                    assess_documentation(backend, evaluation.doc_context)
+                )
+            except Exception:  # noqa: S110
+                pass
+        if evaluation.charmcraft_data:
+            try:
+                ai_meta_assessment = asyncio.run(
+                    assess_metadata(backend, evaluation.charmcraft_data)
+                )
+            except Exception:  # noqa: S110
+                pass
+        if evaluation.code_context.get('code_files'):
+            try:
+                ai_code_analysis = asyncio.run(
+                    analyse_code(backend, evaluation.code_context['code_files'])
+                )
+            except Exception:  # noqa: S110
+                pass
+
+    ai_explanations_added = False
     for result in results:
-        # Convert Sphinx refs in the result to match the converted comment.
-        result = convert_sphinx_refs(result)
-        if result.replace('* [x]', '* [ ]') in comment:
-            comment = comment.replace(result.replace('* [x]', '* [ ]'), result)
+        # Convert Sphinx refs in the description to match the converted comment.
+        description = convert_sphinx_refs(result.description)
+        unchecked = description.replace('* [x]', '* [ ]')
+        if unchecked in comment:
+            replacement = description
+            if result.ai_explanation and result.passed is False:
+                replacement += f'\n  * _AI: {result.ai_explanation}_'
+                ai_explanations_added = True
+            comment = comment.replace(unchecked, replacement)
+
+    if ai_explanations_added:
+        comment += (
+            '\n\n> [!WARNING]\n'
+            '> AI output is a suggestion only. '
+            'AI makes mistakes — please check the AI responses carefully before acting on them.'
+        )
+
+    ai_blocks = []
+    if ai_summary:
+        ai_blocks.append(
+            f'<details>\n<summary>AI Review Summary</summary>\n\n{ai_summary}\n\n</details>'
+        )
+    if ai_doc_assessment:
+        ai_blocks.append(
+            '<details>\n<summary>AI Documentation Assessment</summary>\n\n'
+            f'{ai_doc_assessment}\n\n'
+            '</details>'
+        )
+    if ai_meta_assessment:
+        ai_blocks.append(
+            '<details>\n<summary>AI Metadata Assessment</summary>\n\n'
+            f'{ai_meta_assessment}\n\n'
+            '</details>'
+        )
+    if ai_code_analysis:
+        ai_blocks.append(
+            '<details>\n<summary>AI Code Quality Analysis</summary>\n\n'
+            f'{ai_code_analysis}\n\n'
+            '</details>'
+        )
+    if ai_blocks:
+        comment = '\n\n'.join(ai_blocks) + '\n\n' + comment
+
     return comment
 
 
@@ -366,6 +456,12 @@ def main():
         type=str,
         help='GitHub repository in OWNER/REPO format (e.g. canonical/charmhub-listing-review)',
     )
+    parser.add_argument(
+        '--ai-backend',
+        choices=['copilot', 'snap', 'auto', 'none'],
+        default='auto',
+        help='AI backend to use: copilot, snap, auto (default), or none to disable AI',
+    )
     args = parser.parse_args()
 
     issue_data = get_details_from_issue(args.issue_number, repo=args.repo)
@@ -378,7 +474,7 @@ def main():
         issue_data['ci_integration_url'],
         issue_data['documentation_link'],
     )
-    comment = apply_automated_checks(issue_data, comment)
+    comment = apply_automated_checks(issue_data, comment, args.ai_backend)
 
     update_gh_issue(
         args.issue_number,
