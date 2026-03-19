@@ -45,6 +45,7 @@ def evaluate(
     license_url: str,
     security_url: str,
     branch: str = '',
+    charm_dir: str = '.',
 ) -> list[str]:
     """Evaluate the charm for listing on Charmhub.
 
@@ -58,26 +59,40 @@ def evaluate(
     The items will be ticked when the automation was able to determine that the
     criteria is already met, and unticked both if it was not met and if the
     automation was unable to make a determination.
+
+    The ``charm_dir`` parameter allows specifying a relative path to the charm
+    directory within the repository, defaulting to '.' (repository root). This
+    is useful for monorepos where charms live in subdirectories.
     """
     results: list[str] = []
+    charm_dir_path = pathlib.PurePosixPath(charm_dir)
+    if charm_dir_path.is_absolute() or '..' in charm_dir_path.parts:
+        raise ValueError(
+            f"charm_dir must be a relative path without '..' components, got: {charm_dir!r}"
+        )
     repo_dir = _clone_repo(repository_url, branch)
     try:
+        charm_path = (repo_dir / charm_dir).resolve()
+        if not charm_path.is_dir():
+            raise ValueError(f'charm_dir does not exist or is not a directory: {charm_dir!r}')
+        if not str(charm_path).startswith(str(repo_dir.resolve())):
+            raise ValueError(f'charm_dir resolves outside the repository: {charm_dir!r}')
         results.append(coding_conventions(linting_url))
         results.append(contribution_guidelines(contribution_url))
         results.append(license_statement(license_url))
         results.append(security_doc(security_url))
-        results.append(metadata_links(repo_dir))
+        results.append(metadata_links(charm_path))
         results.append(check_charm_name(charm_name))
-        results.append(action_names(repo_dir))
-        results.append(option_names(repo_dir))
+        results.append(action_names(charm_path))
+        results.append(option_names(charm_path))
         results.append(repository_name(repository_url, charm_name))
-        results.append(relations_includes_optional(repo_dir))
-        results.append(charmcraft_tooling(repo_dir))
-        results.append(charm_plugin_strict_dependencies(repo_dir))
-        results.append(python_requires_version(repo_dir))
-        results.append(repo_has_lock_file(repo_dir))
-        results.append(charm_has_icon(repo_dir))
-        results.append(charm_lib_docs(repo_dir))
+        results.append(relations_includes_optional(charm_path))
+        results.append(charmcraft_tooling(charm_path))
+        results.append(charm_plugin_strict_dependencies(charm_path))
+        results.append(python_requires_version(charm_path))
+        results.append(repo_has_lock_file(charm_path))
+        results.append(charm_has_icon(charm_path))
+        results.append(charm_lib_docs(charm_path))
     finally:
         shutil.rmtree(str(repo_dir), ignore_errors=True)
     return results

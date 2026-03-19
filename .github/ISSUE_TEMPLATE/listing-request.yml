@@ -30,6 +30,15 @@ body:
       required: true
 
   - type: input
+    id: Charm-Directory
+    attributes:
+      label: "Charm Directory"
+      description: "For repos with more than one charm: the relative path to the charm directory within the repository (e.g. charms/my-charm). Leave empty if the charm is at the repository root."
+      placeholder: "charms/my-charm"
+    validations:
+      required: false
+
+  - type: input
     id: CI-Linting
     attributes:
       label: "CI Linting"

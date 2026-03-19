@@ -140,6 +140,7 @@ class _IssueData(TypedDict):
     name: str
     demo_url: str
     project_repo: str
+    charm_dir: str
     ci_linting: str
     ci_release_url: str
     ci_integration_url: str
@@ -171,6 +172,7 @@ def get_details_from_issue(issue_number: int, repo: str | None = None):
         'name': '### Charm name',
         'demo_url': '### Demo',
         'project_repo': '### Project Repository',
+        'charm_dir': '### Charm Directory',
         'ci_linting': '### CI Linting',
         'ci_release_url': '### CI Release',
         'ci_integration_url': '### CI Integration Tests',
@@ -189,12 +191,15 @@ def get_details_from_issue(issue_number: int, repo: str | None = None):
         else:
             issue_data[key] = None
 
+    # Default charm_dir to '.' if not provided or empty.
+    if not issue_data.get('charm_dir') or issue_data['charm_dir'] == '_No response_':
+        issue_data['charm_dir'] = '.'
+
     # These have expected filenames, so we use those rather than require the author provide them.
     # This is quite specific to GitHub, but we can add support for other platforms if required,
     # and if they aren't found then the reviewer just has to locate them themselves.
-    default_branch = issue_data.get('default_branch') or get_default_branch(
-        issue_data['project_repo']
-    )
+    project_repo = issue_data.get('project_repo') or ''
+    default_branch = issue_data.get('default_branch') or get_default_branch(str(project_repo))
     issue_data['default_branch'] = default_branch
     issue_data['contribution_link'] = (
         f'{issue_data["project_repo"]}/blob/{default_branch}/CONTRIBUTING.md'
@@ -339,6 +344,7 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['license_link'],
         issue_data['security_link'],
         issue_data['default_branch'],
+        charm_dir=issue_data.get('charm_dir', '.'),
     )
     for result in results:
         # Convert Sphinx refs in the result to match the converted comment.

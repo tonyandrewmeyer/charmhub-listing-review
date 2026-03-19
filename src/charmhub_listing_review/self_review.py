@@ -64,6 +64,7 @@ def print_self_review_results(
     project_repo: str = '',
     ci_linting: str = '',
     branch: str = '',
+    charm_dir: str = '.',
 ):
     """Print the self-review results to console."""
     print(f"\n\033[1m🔍 Charmhub Public Listing Self-Review for '{charm_name}'\033[0m")
@@ -110,6 +111,7 @@ def print_self_review_results(
                 license_url,
                 security_url,
                 default_branch,
+                charm_dir=charm_dir,
             )
 
             automated_checks = set()
@@ -178,6 +180,14 @@ def main():
         '--branch',
         help='Branch of the repository to review (auto-detected default branch if not specified)',
     )
+    parser.add_argument(
+        '--charm-dir',
+        default='.',
+        help=(
+            'Relative path to the charm directory within the repository '
+            '(default: repository root). Useful for monorepos.'
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -191,6 +201,7 @@ def main():
             project_repo=args.repository,
             ci_linting=args.ci_linting_url or '',
             branch=args.branch or '',
+            charm_dir=args.charm_dir,
         )
     except KeyboardInterrupt:
         print('\n\n⚡ Review cancelled by user.')

@@ -47,6 +47,75 @@ class TestGetDefaultBranch:
         assert evaluate.get_default_branch('https://github.com/org/repo') == 'main'
 
 
+class TestEvaluateCharmDir:
+    """Test that evaluate() correctly handles the charm_dir parameter."""
+
+    @mock.patch('charmhub_listing_review.evaluate._clone_repo')
+    def test_evaluate_with_charm_dir(self, mock_clone, tmp_path):
+        """evaluate() runs checks against the subdirectory."""
+        charm_subdir = tmp_path / 'charms' / 'my-charm'
+        charm_subdir.mkdir(parents=True)
+        (charm_subdir / 'charmcraft.yaml').write_text(
+            'name: my-charm\ntitle: My Charm\nsummary: A charm.\n'
+            'description: A charm that does things.\n'
+        )
+        (charm_subdir / 'pyproject.toml').write_text('[project]\nrequires-python = ">=3.10"\n')
+        mock_clone.return_value = tmp_path
+        results = evaluate.evaluate(
+            charm_name='my-charm',
+            repository_url='https://github.com/org/my-charm-operator',
+            linting_url='',
+            contribution_url='',
+            license_url='',
+            security_url='',
+            charm_dir='charms/my-charm',
+        )
+        # python_requires_version should pass because pyproject.toml is in the subdirectory.
+        python_result = [
+            r for r in results if 'requires-python' in r.lower() or 'requires_python' in r.lower()
+        ]
+        assert python_result
+        assert python_result[0].startswith('* [x]')
+
+    def test_evaluate_rejects_absolute_charm_dir(self):
+        with pytest.raises(ValueError, match='relative path'):
+            evaluate.evaluate(
+                charm_name='my-charm',
+                repository_url='https://github.com/org/repo',
+                linting_url='',
+                contribution_url='',
+                license_url='',
+                security_url='',
+                charm_dir='/etc',
+            )
+
+    def test_evaluate_rejects_traversal_charm_dir(self):
+        with pytest.raises(ValueError, match="'\\.\\.'"):
+            evaluate.evaluate(
+                charm_name='my-charm',
+                repository_url='https://github.com/org/repo',
+                linting_url='',
+                contribution_url='',
+                license_url='',
+                security_url='',
+                charm_dir='../../etc',
+            )
+
+    @mock.patch('charmhub_listing_review.evaluate._clone_repo')
+    def test_evaluate_rejects_nonexistent_charm_dir(self, mock_clone, tmp_path):
+        mock_clone.return_value = tmp_path
+        with pytest.raises(ValueError, match='does not exist'):
+            evaluate.evaluate(
+                charm_name='my-charm',
+                repository_url='https://github.com/org/repo',
+                linting_url='',
+                contribution_url='',
+                license_url='',
+                security_url='',
+                charm_dir='nonexistent',
+            )
+
+
 class TestCloneRepo:
     @mock.patch('subprocess.run')
     def test_clone_without_branch(self, mock_run):
@@ -299,6 +368,43 @@ def test_metadata_links_parametrized(mock_head, tmp_path, yaml_content, link_ok,
     mock_head.return_value.ok = link_ok
     result = evaluate.metadata_links(tmp_path)
     assert (result.startswith('* [x]')) == expected_checked
+
+
+def test_check_action_names_monorepo(tmp_path):
+    """Checks work when charm files are in a subdirectory (monorepo)."""
+    charm_dir = tmp_path / 'charms' / 'my-charm'
+    charm_dir.mkdir(parents=True)
+    charmcraft_yaml = charm_dir / 'charmcraft.yaml'
+    charmcraft_yaml.write_text("""
+name: my-charm
+actions:
+    valid-action: {}
+""")
+    result = evaluate.action_names(charm_dir)
+    assert result.startswith('* [x]')
+
+
+def test_python_requires_version_monorepo(tmp_path):
+    """pyproject.toml is found in a charm subdirectory."""
+    charm_dir = tmp_path / 'charms' / 'my-charm'
+    charm_dir.mkdir(parents=True)
+    pyproject = charm_dir / 'pyproject.toml'
+    pyproject.write_text("""
+[project]
+requires-python = ">=3.10"
+""")
+    result = evaluate.python_requires_version(charm_dir)
+    assert result.startswith('* [x]')
+
+
+def test_charm_has_icon_monorepo(tmp_path):
+    """icon.svg is found in a charm subdirectory."""
+    charm_dir = tmp_path / 'charms' / 'my-charm'
+    charm_dir.mkdir(parents=True)
+    icon = charm_dir / 'icon.svg'
+    icon.write_text('<svg width="100" height="100"></svg>')
+    result = evaluate.charm_has_icon(charm_dir)
+    assert result.startswith('* [x]')
 
 
 @pytest.mark.parametrize(
