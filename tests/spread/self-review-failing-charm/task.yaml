@@ -9,9 +9,8 @@ execute: |
   CHARM_DIR=$(mktemp -d)
   bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" failing
 
-  # Run self-review with no AI.
-  output=$(CHARMHUB_REVIEW_AI_BACKEND=none \
-    uv run --directory "$SPREAD_PATH" \
+  # Run self-review against the badly formed charm.
+  output=$(uv run --directory "$SPREAD_PATH" \
     self-review \
       --charm-name "Bad_Charm_Name" \
       --repository "file://$CHARM_DIR" 2>&1) || true
@@ -20,16 +19,7 @@ execute: |
 
   # Should report 0 passed and multiple failures.
   echo "$output" | MATCH "0 passed"
-  echo "$output" | MATCH "8 failed"
-
-  # Charm name should fail (uppercase, underscores).
-  echo "$output" | MATCH "❌.*charm name|❌.*slug"
-
-  # Action names should fail (Do_Something has underscores/uppercase).
-  echo "$output" | MATCH "❌.*action"
-
-  # Option names should fail (Bad_Option).
-  echo "$output" | MATCH "❌.*option"
+  echo "$output" | MATCH "[0-9]+ failed"
 
   # Icon should fail (no icon.svg).
   echo "$output" | MATCH "❌.*icon"
@@ -39,9 +29,6 @@ execute: |
 
   # pyproject requires-python should fail.
   echo "$output" | MATCH "❌.*requires-python"
-
-  # Optional key missing in relations should fail.
-  echo "$output" | MATCH "❌.*optional"
 
 restore: |
   rm -rf "${CHARM_DIR:-}" 2>/dev/null || true

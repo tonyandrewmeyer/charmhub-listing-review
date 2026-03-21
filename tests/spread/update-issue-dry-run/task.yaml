@@ -38,8 +38,7 @@ execute: |
   export PATH="$SPREAD_PATH/tests/spread/lib/mock-gh-bin:$PATH"
 
   # Run update-issue in dry-run mode (no real GH interaction).
-  output=$(CHARMHUB_REVIEW_AI_BACKEND=none \
-    uv run --directory "$SPREAD_PATH" \
+  output=$(uv run --directory "$SPREAD_PATH" \
     update-issue \
       --issue-number 42 \
       --reviewers-file "$SPREAD_PATH"/tests/spread/lib/test-reviewers.yaml \

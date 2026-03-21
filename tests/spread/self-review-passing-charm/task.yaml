@@ -9,9 +9,8 @@ execute: |
   CHARM_DIR=$(mktemp -d)
   bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
 
-  # Run self-review pointing at the local file:// repo, with no AI backend.
-  output=$(CHARMHUB_REVIEW_AI_BACKEND=none \
-    uv run --directory "$SPREAD_PATH" \
+  # Run self-review pointing at the local file:// repo.
+  output=$(uv run --directory "$SPREAD_PATH" \
     self-review \
       --charm-name test-charm \
       --repository "file://$CHARM_DIR" 2>&1) || true
@@ -29,9 +28,6 @@ execute: |
 
   # Lock file & pyproject should pass.
   echo "$output" | MATCH "✅.*lock file|✅.*pyproject|✅.*committed to version control"
-
-  # AI features should be disabled.
-  echo "$output" | MATCH "AI.*disabled|no AI backend"
 
   # Progress summary should be present and show passes.
   echo "$output" | MATCH "Progress:.*passed"
