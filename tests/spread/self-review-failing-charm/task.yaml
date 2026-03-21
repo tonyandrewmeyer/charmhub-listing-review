@@ -25,7 +25,7 @@ execute: |
   echo "$output" | MATCH "❌.*icon"
 
   # Lock file should fail.
-  echo "$output" | MATCH "❌.*lock file|❌.*committed to version control"
+  echo "$output" | MATCH "❌.*lock file" || echo "$output" | MATCH "❌.*committed to version control"
 
   # pyproject requires-python should fail.
   echo "$output" | MATCH "❌.*requires-python"

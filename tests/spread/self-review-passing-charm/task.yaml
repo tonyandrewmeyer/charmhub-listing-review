@@ -24,10 +24,10 @@ execute: |
   echo "$output" | MATCH "✅.*icon"
 
   # Charm name check should pass (valid slug format).
-  echo "$output" | MATCH "✅.*charm name|✅.*slug"
+  echo "$output" | MATCH "✅.*charm name" || echo "$output" | MATCH "✅.*slug"
 
   # Lock file & pyproject should pass.
-  echo "$output" | MATCH "✅.*lock file|✅.*pyproject|✅.*committed to version control"
+  echo "$output" | MATCH "✅.*lock file" || echo "$output" | MATCH "✅.*committed to version control"
 
   # Progress summary should be present and show passes.
   echo "$output" | MATCH "Progress:.*passed"
