@@ -466,7 +466,7 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> str:
 
     for command in commands_to_run:
         try:
-            subprocess.check_output(command)
+            subprocess.check_output(command, stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             return description
 
