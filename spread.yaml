@@ -91,14 +91,5 @@ prepare: |
   uv venv
   uv pip install -e . openai tox tox-uv
 
-  # Diagnostics: verify entry points are spawnable.
-  echo "=== Spread prepare diagnostics ==="
-  whoami
-  which python3
-  ls -la .venv/bin/self-review .venv/bin/python3
-  head -1 .venv/bin/self-review
-  readlink -f .venv/bin/python3
-  .venv/bin/self-review --help
-
 restore: |
   rm -rf "$SPREAD_PATH/.venv"
