@@ -41,11 +41,13 @@ from typing import TypedDict, cast
 
 import yaml
 
+import sys as _sys
+
+from .ai_backend import print_ai_unavailable_notice, resolve_backend
 from .ai_client import (
     assess_documentation,
     assess_metadata,
     explain_and_summarise,
-    is_ai_available,
 )
 from .ai_code_review import analyse_code
 from .evaluate import evaluate
@@ -157,13 +159,16 @@ class _IssueData(TypedDict):
     security_link: str
 
 
-def get_details_from_issue(issue_number: int):
+def get_details_from_issue(issue_number: int, repo: str | None = None):
     """Fetch details from the issue number using the GitHub CLI.
 
     Requires `gh` CLI to be installed and authenticated.
     """
+    cmd = ['gh', 'issue', 'view', str(issue_number), '--json', 'body']
+    if repo:
+        cmd.extend(['--repo', repo])
     result = subprocess.run(
-        ['gh', 'issue', 'view', str(issue_number), '--json', 'body'],
+        cmd,
         capture_output=True,
         text=True,
         check=True,
@@ -202,7 +207,12 @@ def get_details_from_issue(issue_number: int):
     return cast('_IssueData', issue_data)
 
 
-def assign_review(issue_number: int, reviewers_file: pathlib.Path, dry_run: bool = False):
+def assign_review(
+    issue_number: int,
+    reviewers_file: pathlib.Path,
+    dry_run: bool = False,
+    repo: str | None = None,
+):
     """Assign the issue to a team.
 
     We assign the issue to a single person (generally the manager) from a
@@ -227,10 +237,10 @@ def assign_review(issue_number: int, reviewers_file: pathlib.Path, dry_run: bool
     reviewer = random.choice(team_reviewers)  # noqa: S311
 
     if not dry_run:
-        subprocess.run(
-            ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', reviewer[1:]],
-            check=True,
-        )
+        cmd = ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', reviewer[1:]]
+        if repo:
+            cmd.extend(['--repo', repo])
+        subprocess.run(cmd, check=True)
     return reviewer
 
 
@@ -238,9 +248,10 @@ def update_gh_issue(
     issue_number: int,
     summary: str,
     comment: str,
-    reviewers_file: pathlib.Path,
+    reviewers_file: pathlib.Path | None = None,
     dry_run: bool = False,
     assign_to: str | None = None,
+    repo: str | None = None,
 ):
     """Update the specified GitHub issue with the latest generated comment."""
     # Update the issue title.
@@ -248,31 +259,31 @@ def update_gh_issue(
         print(summary)
         print()
     else:
-        subprocess.run(
-            ['gh', 'issue', 'edit', str(issue_number), '--title', summary],
-            check=True,
-        )
+        cmd = ['gh', 'issue', 'edit', str(issue_number), '--title', summary]
+        if repo:
+            cmd.extend(['--repo', repo])
+        subprocess.run(cmd, check=True)
 
     # Assign the issue to the specified reviewer, or pick one automatically.
     if assign_to:
         username = assign_to.removeprefix('@')
         if not dry_run:
-            subprocess.run(
-                ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', username],
-                check=True,
-            )
+            cmd = ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', username]
+            if repo:
+                cmd.extend(['--repo', repo])
+            subprocess.run(cmd, check=True)
         manager = f'@{username}'
     else:
-        gh = subprocess.run(
-            ['gh', 'issue', 'view', str(issue_number), '--json', 'assignees'],
-            capture_output=True,
-            text=True,
-        )
+        assert reviewers_file is not None  # Enforced by argument parser.
+        cmd = ['gh', 'issue', 'view', str(issue_number), '--json', 'assignees']
+        if repo:
+            cmd.extend(['--repo', repo])
+        gh = subprocess.run(cmd, capture_output=True, text=True)
         assignees = json.loads(gh.stdout.strip()).get('assignees', [])
         manager = (
             assignees[0]['login']
             if assignees
-            else assign_review(issue_number, reviewers_file, dry_run)
+            else assign_review(issue_number, reviewers_file, dry_run, repo)
         )
     request_review = re.sub(
         r'\s',
@@ -286,48 +297,56 @@ review within the next three working days.
     )
     comment = f'{request_review}\n\n{comment}'
 
-    existing_comments = subprocess.run(
-        ['gh', 'issue', 'view', str(issue_number), '--json', 'comments'],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    cmd = ['gh', 'issue', 'view', str(issue_number), '--json', 'comments']
+    if repo:
+        cmd.extend(['--repo', repo])
+    existing_comments = subprocess.run(cmd, capture_output=True, text=True, check=True)
     existing_comments = json.loads(existing_comments.stdout.strip()).get('comments', [])
     if not existing_comments:
         # Create a new comment.
         if dry_run:
             print(comment)
         else:
-            subprocess.run(
-                ['gh', 'issue', 'comment', str(issue_number), '--body', comment],
-                check=True,
-            )
+            cmd = ['gh', 'issue', 'comment', str(issue_number), '--body', comment]
+            if repo:
+                cmd.extend(['--repo', repo])
+            subprocess.run(cmd, check=True)
         return
 
     # Update the first comment with the new content.
     if dry_run:
         print(comment)
     else:
-        subprocess.run(
-            [
-                'gh',
-                'issue',
-                'comment',
-                str(issue_number),
-                '--edit-last',  # comment of the current user
-                '--body',
-                comment,
-            ],
-            check=True,
-        )
+        cmd = [
+            'gh',
+            'issue',
+            'comment',
+            str(issue_number),
+            '--edit-last',  # comment of the current user
+            '--body',
+            comment,
+        ]
+        if repo:
+            cmd.extend(['--repo', repo])
+        subprocess.run(cmd, check=True)
 
 
-def apply_automated_checks(issue_data: _IssueData, comment: str):
+def apply_automated_checks(issue_data: _IssueData, comment: str, ai_backend_choice: str = 'auto'):
     """Adjust the comment to tick items based on automated checks.
 
-    If the Copilot SDK is available, also adds AI-generated explanations
+    If an AI backend is available, also adds AI-generated explanations
     as sub-bullets under failed checklist items, and prepends an AI summary.
     """
+    backend = resolve_backend(ai_backend_choice)
+    if backend is None and ai_backend_choice not in ('none', 'auto'):
+        print(
+            f'Warning: AI backend {ai_backend_choice!r} was requested but is not available.',
+            file=_sys.stderr,
+        )
+        print_ai_unavailable_notice()
+    elif backend is None and ai_backend_choice == 'auto':
+        print_ai_unavailable_notice()
+
     evaluation = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
@@ -335,7 +354,7 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['contribution_link'],
         issue_data['license_link'],
         issue_data['security_link'],
-        collect_code=is_ai_available(),
+        collect_code=backend is not None,
     )
     results = evaluation.checks
 
@@ -343,26 +362,34 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
     ai_doc_assessment = ''
     ai_meta_assessment = ''
     ai_code_analysis = ''
-    if is_ai_available():
+    if backend is not None:
         try:
-            results, ai_summary = asyncio.run(explain_and_summarise(issue_data['name'], results))
-        except Exception:  # noqa: S110
-            pass  # AI features are best-effort.
+            results, ai_summary = asyncio.run(
+                explain_and_summarise(backend, issue_data['name'], results)
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f'Warning: AI summary failed: {exc}', file=_sys.stderr)
         if evaluation.doc_context:
             try:
-                ai_doc_assessment = asyncio.run(assess_documentation(evaluation.doc_context))
-            except Exception:  # noqa: S110
-                pass
+                ai_doc_assessment = asyncio.run(
+                    assess_documentation(backend, evaluation.doc_context)
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f'Warning: AI doc assessment failed: {exc}', file=_sys.stderr)
         if evaluation.charmcraft_data:
             try:
-                ai_meta_assessment = asyncio.run(assess_metadata(evaluation.charmcraft_data))
-            except Exception:  # noqa: S110
-                pass
+                ai_meta_assessment = asyncio.run(
+                    assess_metadata(backend, evaluation.charmcraft_data)
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f'Warning: AI metadata assessment failed: {exc}', file=_sys.stderr)
         if evaluation.code_context.get('code_files'):
             try:
-                ai_code_analysis = asyncio.run(analyse_code(evaluation.code_context['code_files']))
-            except Exception:  # noqa: S110
-                pass
+                ai_code_analysis = asyncio.run(
+                    analyse_code(backend, evaluation.code_context['code_files'])
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f'Warning: AI code analysis failed: {exc}', file=_sys.stderr)
 
     ai_explanations_added = False
     for result in results:
@@ -420,23 +447,34 @@ def main():
     parser.add_argument(
         '--issue-number', type=int, help='The issue number to update', required=True
     )
-    parser.add_argument(
+    reviewer_group = parser.add_mutually_exclusive_group(required=True)
+    reviewer_group.add_argument(
         '--reviewers-file',
         type=pathlib.Path,
         help='Path to the reviewers YAML file',
-        required=True,
+    )
+    reviewer_group.add_argument(
+        '--assign-to',
+        type=str,
+        help='Override automatic reviewer assignment with this GitHub username',
     )
     parser.add_argument(
         '--dry-run', action='store_true', help='Do not update the issue, just print the output'
     )
     parser.add_argument(
-        '--assign-to',
+        '--repo',
         type=str,
-        help='Override automatic reviewer assignment with this GitHub username',
+        help='GitHub repository in OWNER/REPO format (e.g. canonical/charmhub-listing-review)',
+    )
+    parser.add_argument(
+        '--ai-backend',
+        choices=['copilot', 'snap', 'auto', 'none'],
+        default='auto',
+        help='AI backend to use: copilot, snap, auto (default), or none to disable AI',
     )
     args = parser.parse_args()
 
-    issue_data = get_details_from_issue(args.issue_number)
+    issue_data = get_details_from_issue(args.issue_number, repo=args.repo)
 
     summary = issue_summary(issue_data['name'])
     comment = issue_comment(
@@ -446,15 +484,16 @@ def main():
         issue_data['ci_integration_url'],
         issue_data['documentation_link'],
     )
-    comment = apply_automated_checks(issue_data, comment)
+    comment = apply_automated_checks(issue_data, comment, args.ai_backend)
 
     update_gh_issue(
         args.issue_number,
         summary,
         comment,
-        args.reviewers_file,
+        reviewers_file=args.reviewers_file,
         dry_run=args.dry_run,
         assign_to=args.assign_to,
+        repo=args.repo,
     )
 
 

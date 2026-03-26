@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Interactive self-review assistant using the Copilot SDK.
+"""Interactive self-review assistant.
 
 Provides a conversational REPL where charm authors can ask follow-up
 questions about their review results and get AI-powered guidance.
@@ -26,7 +26,7 @@ import json
 import re
 import sys
 
-from .ai_client import create_session, is_ai_available, send_prompt, start_client, stop_client
+from .ai_backend import print_ai_unavailable_notice, resolve_backend
 from .evaluate import EvaluationResult, evaluate
 
 INTERACTIVE_SYSTEM_PROMPT = """\
@@ -115,16 +115,16 @@ def _build_context_prompt(
 async def _run_interactive_session(
     charm_name: str,
     evaluation: EvaluationResult,
+    backend,
 ) -> None:
     """Run the interactive REPL loop."""
-    await start_client()
+    await backend.start()
     try:
-        session = await create_session(INTERACTIVE_SYSTEM_PROMPT)
+        session = await backend.create_session(INTERACTIVE_SYSTEM_PROMPT)
 
         # Send initial context as the first message.
         context_prompt = _build_context_prompt(charm_name, evaluation)
-        initial_response = await send_prompt(
-            session,
+        initial_response = await session.send(
             f'{context_prompt}\n\n'
             f'Acknowledge that you have the review context for charm "{charm_name}" '
             f'and briefly describe what you can help with. Be concise (2-3 sentences).',
@@ -144,31 +144,33 @@ async def _run_interactive_session(
             if not user_input.strip():
                 continue
 
-            response = await send_prompt(session, user_input)
+            response = await session.send(user_input)
             if response:
                 print(f'\n{_sanitise_interactive_output(response)}\n')
             else:
                 print('\n(No response generated)\n')
 
     finally:
-        await stop_client()
+        await backend.stop()
 
 
 def run_interactive(
     charm_name: str,
     evaluation: EvaluationResult,
+    backend=None,
 ) -> None:
     """Launch the interactive review assistant.
 
     Args:
         charm_name: The name of the charm being reviewed.
         evaluation: The complete evaluation result from evaluate().
+        backend: An ``AIBackend`` instance.  If ``None``, one is resolved
+            automatically.
     """
-    if not is_ai_available():
-        print(
-            '\nInteractive mode requires the Copilot SDK.'
-            '\nInstall with: pip install github-copilot-sdk'
-        )
+    if backend is None:
+        backend = resolve_backend()
+    if backend is None:
+        print_ai_unavailable_notice()
         return
 
     print('\n\033[1m💬 Interactive Review Assistant\033[0m')
@@ -176,7 +178,7 @@ def run_interactive(
     print("Type your questions about the review. Type 'quit' to exit.\n")
 
     try:
-        asyncio.run(_run_interactive_session(charm_name, evaluation))
+        asyncio.run(_run_interactive_session(charm_name, evaluation, backend))
     except KeyboardInterrupt:
         print('\n')
 
@@ -193,14 +195,18 @@ def main():
         help='URL of the charm repository',
     )
     parser.add_argument('--ci-linting-url', help='URL to CI linting workflow', default='')
+    parser.add_argument(
+        '--ai-backend',
+        choices=['copilot', 'snap', 'auto'],
+        default='auto',
+        help='AI backend to use (default: auto)',
+    )
 
     args = parser.parse_args()
 
-    if not is_ai_available():
-        print(
-            'Interactive review requires the Copilot SDK.'
-            '\nInstall with: pip install github-copilot-sdk'
-        )
+    backend = resolve_backend(args.ai_backend)
+    if backend is None:
+        print_ai_unavailable_notice()
         sys.exit(1)
 
     print(f"\n🔍 Evaluating '{args.charm_name}'...")
@@ -222,7 +228,7 @@ def main():
     indeterminate = sum(1 for r in evaluation.checks if r.passed is None)
     print(f'📊 {passed} passed, {failed} failed, {indeterminate} need manual review')
 
-    run_interactive(args.charm_name, evaluation)
+    run_interactive(args.charm_name, evaluation, backend)
 
 
 if __name__ == '__main__':

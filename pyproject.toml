@@ -1,3 +1,7 @@
+[build-system]
+requires = ["uv-build>=0.7,<1"]
+build-backend = "uv_build"
+
 [project]
 name = "charmhub-listing-review"
 version = "1.0.0b1"
@@ -23,6 +27,9 @@ dependencies = [
 [dependency-groups]
 ai = [
     "github-copilot-sdk",
+]
+snap-ai = [
+    "openai>=1.0",
 ]
 lint = [
     "ruff~=0.11",

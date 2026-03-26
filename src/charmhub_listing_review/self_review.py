@@ -34,11 +34,11 @@ import asyncio
 import sys
 import textwrap
 
+from .ai_backend import print_ai_unavailable_notice, resolve_backend
 from .ai_client import (
     assess_documentation,
     assess_metadata,
     explain_and_summarise,
-    is_ai_available,
 )
 from .ai_code_review import analyse_code
 from .evaluate import CheckResult, EvaluationResult, evaluate
@@ -93,12 +93,15 @@ def print_self_review_results(
     project_repo: str = '',
     ci_linting: str = '',
     code_review: bool = False,
+    ai_backend_choice: str = 'auto',
 ) -> EvaluationResult | None:
     """Print the self-review results to console.
 
     Returns the EvaluationResult if evaluation was performed, for use by
     interactive mode.
     """
+    backend = resolve_backend(ai_backend_choice)
+
     print(f"\n\033[1m🔍 Charmhub Public Listing Self-Review for '{charm_name}'\033[0m")
     print('=' * (45 + len(charm_name)))
 
@@ -147,7 +150,7 @@ def print_self_review_results(
                 contribution_url,
                 license_url,
                 security_url,
-                collect_code=is_ai_available() and code_review,
+                collect_code=backend is not None and code_review,
             )
             results = evaluation.checks
             charmcraft_data = evaluation.charmcraft_data
@@ -183,9 +186,11 @@ def print_self_review_results(
 
         # Run AI explanations and summary in a single event loop (best-effort).
         ai_summary = ''
-        if results and is_ai_available():
+        if results and backend is not None:
             try:
-                results, ai_summary = asyncio.run(explain_and_summarise(charm_name, results))
+                results, ai_summary = asyncio.run(
+                    explain_and_summarise(backend, charm_name, results)
+                )
                 for result in results:
                     if result.ai_explanation:
                         description = convert_sphinx_refs(result.description)
@@ -214,14 +219,14 @@ def print_self_review_results(
     )
 
     # Print AI-driven outputs when available.
-    if results and is_ai_available() and ai_summary:
+    if results and backend is not None and ai_summary:
         print('\n\033[1m🤖 AI Review Summary\033[0m')
         print('-' * 40)
         print(ai_summary)
 
-    if is_ai_available() and doc_context:
+    if backend is not None and doc_context:
         try:
-            doc_assessment = asyncio.run(assess_documentation(doc_context))
+            doc_assessment = asyncio.run(assess_documentation(backend, doc_context))
             if doc_assessment:
                 print('\n\033[1m📄 AI Documentation Assessment\033[0m')
                 print('-' * 40)
@@ -229,9 +234,9 @@ def print_self_review_results(
         except Exception:  # noqa: S110
             pass
 
-    if is_ai_available() and charmcraft_data:
+    if backend is not None and charmcraft_data:
         try:
-            meta_assessment = asyncio.run(assess_metadata(charmcraft_data))
+            meta_assessment = asyncio.run(assess_metadata(backend, charmcraft_data))
             if meta_assessment:
                 print('\n\033[1m📝 AI Metadata Assessment\033[0m')
                 print('-' * 40)
@@ -239,15 +244,18 @@ def print_self_review_results(
         except Exception:  # noqa: S110
             pass
 
-    if is_ai_available() and code_review and code_context.get('code_files'):
+    if backend is not None and code_review and code_context.get('code_files'):
         try:
-            code_analysis = asyncio.run(analyse_code(code_context['code_files']))
+            code_analysis = asyncio.run(analyse_code(backend, code_context['code_files']))
             if code_analysis:
                 print('\n\033[1m🔬 AI Code Quality Analysis\033[0m')
                 print('-' * 40)
                 print(code_analysis)
         except Exception:  # noqa: S110
             pass
+
+    if backend is None:
+        print_ai_unavailable_notice()
 
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')
@@ -284,12 +292,18 @@ def main():
     parser.add_argument(
         '--code-review',
         action='store_true',
-        help='Enable AI code quality analysis (requires Copilot SDK, slower)',
+        help='Enable AI code quality analysis (slower)',
     )
     parser.add_argument(
         '--interactive',
         action='store_true',
-        help='Launch interactive AI assistant after review (requires Copilot SDK)',
+        help='Launch interactive AI assistant after review',
+    )
+    parser.add_argument(
+        '--ai-backend',
+        choices=['copilot', 'snap', 'auto', 'none'],
+        default='auto',
+        help="AI backend to use (default: auto; use 'none' to disable AI)",
     )
 
     args = parser.parse_args()
@@ -304,10 +318,12 @@ def main():
             project_repo=args.repository,
             ci_linting=args.ci_linting_url or '',
             code_review=args.code_review,
+            ai_backend_choice=args.ai_backend,
         )
 
         if args.interactive and evaluation:
-            run_interactive(args.charm_name, evaluation)
+            backend = resolve_backend(args.ai_backend)
+            run_interactive(args.charm_name, evaluation, backend)
         elif args.interactive:
             print(
                 '\n⚠️  Interactive mode requires a repository to be specified '

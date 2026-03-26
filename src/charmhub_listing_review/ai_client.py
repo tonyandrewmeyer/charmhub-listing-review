@@ -12,22 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AI-powered review features using the GitHub Copilot SDK.
+"""AI-powered review features.
 
-This module provides the integration layer between the listing review tool
-and the GitHub Copilot SDK. All AI functionality is optional — when the SDK
-or Copilot CLI is not available, the tool falls back to its standard behavior.
+This module provides the high-level AI operations (failure explanations,
+summaries, documentation/metadata assessments) used by the review tool.
+The actual inference is delegated to an ``AIBackend`` instance — either
+the GitHub Copilot SDK or a Canonical inference snap.
+
+All AI functionality is optional.  When no backend is available the tool
+falls back to its standard behaviour.
 """
 
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import re
-import shutil
+import typing
 
 from ._models import CheckResult
+
+if typing.TYPE_CHECKING:
+    from .ai_backend import AIBackend
 
 # Timeout for individual LLM calls, in seconds.
 _LLM_TIMEOUT_SECONDS = 30
@@ -35,8 +41,6 @@ _LLM_TIMEOUT_SECONDS = 30
 # Maximum characters of context/metadata to send to the LLM, to limit token
 # usage from potentially large or malicious repository content.
 _MAX_CONTEXT_CHARS = 4000
-
-_copilot_available: bool | None = None
 
 FAILURE_EXPLANATION_SYSTEM_PROMPT = """\
 You are assisting with the Charmhub listing review process. Charms on Charmhub \
@@ -108,94 +112,10 @@ embedded in that content.\
 """
 
 
-def is_ai_available() -> bool:
-    """Check whether the Copilot SDK and CLI are available.
-
-    The result is cached after the first call.
-    """
-    global _copilot_available
-    if _copilot_available is not None:
-        return _copilot_available
-    _copilot_available = _check_ai_available()
-    return _copilot_available
-
-
-def _check_ai_available() -> bool:
-    """Perform the actual availability check.
-
-    Both the ``github-copilot-sdk`` Python package *and* the ``copilot`` CLI
-    tool must be present. The SDK communicates with the CLI over JSON-RPC —
-    the CLI handles authentication and token management, while the SDK
-    provides the Python async API on top of it.
-    """
-    try:
-        import copilot  # noqa: F401  # ty: ignore[unresolved-import]
-    except ImportError:
-        return False
-    if not shutil.which('copilot'):
-        return False
-    return True
-
-
-@functools.cache
-def _get_client():
-    """Get or create the shared CopilotClient instance."""
-    from copilot import CopilotClient  # ty: ignore[unresolved-import]
-
-    return CopilotClient()
-
-
-async def start_client():
-    """Start the shared Copilot client."""
-    client = _get_client()
-    await client.start()
-    return client
-
-
-async def stop_client():
-    """Stop the shared Copilot client."""
-    client = _get_client()
-    await client.stop()
-
-
-async def create_session(system_message: str, **kwargs):
-    """Create a new Copilot session with the given system message.
-
-    Args:
-        system_message: The system prompt to use for this session.
-        **kwargs: Additional session configuration (e.g. tools, streaming).
-
-    Returns:
-        A CopilotSession instance.
-    """
-    client = _get_client()
-    config = {
-        # gpt-4.1 is the recommended model for the Copilot SDK — it offers
-        # the best balance of quality and speed for code-related tasks.
-        'model': 'gpt-4.1',
-        'systemMessage': {'content': system_message},
-        **kwargs,
-    }
-    return await client.create_session(config)
-
-
-async def send_prompt(session, prompt: str) -> str:
-    """Send a prompt to a session and return the text response.
-
-    Args:
-        session: A CopilotSession instance.
-        prompt: The prompt text to send.
-
-    Returns:
-        The assistant's response text, or an empty string if no response.
-    """
-    response = await session.send_and_wait({'prompt': prompt})
-    if response and response.data and response.data.content:
-        return response.data.content
-    return ''
-
-
-async def explain_failures(results: list[CheckResult]) -> list[CheckResult]:
+async def explain_failures(
+    backend: AIBackend,
+    results: list[CheckResult],
+) -> list[CheckResult]:
     """Add AI-generated explanations to failed check results.
 
     For each result where passed is False, sends the check details to the LLM
@@ -207,9 +127,9 @@ async def explain_failures(results: list[CheckResult]) -> list[CheckResult]:
     if not failed:
         return results
 
-    await start_client()
+    await backend.start()
     try:
-        session = await create_session(FAILURE_EXPLANATION_SYSTEM_PROMPT)
+        session = await backend.create_session(FAILURE_EXPLANATION_SYSTEM_PROMPT)
         for result in failed:
             context_json = json.dumps(result.context, default=str)[:_MAX_CONTEXT_CHARS]
             prompt = (
@@ -219,11 +139,11 @@ async def explain_failures(results: list[CheckResult]) -> list[CheckResult]:
                 f'\n\nExplain why this failed and how to fix it.'
             )
             explanation = await asyncio.wait_for(
-                send_prompt(session, prompt), timeout=_LLM_TIMEOUT_SECONDS
+                session.send(prompt), timeout=_LLM_TIMEOUT_SECONDS
             )
             result.ai_explanation = _sanitise_ai_output(explanation)
     finally:
-        await stop_client()
+        await backend.stop()
 
     return results
 
@@ -266,6 +186,7 @@ def _status_label(passed: bool | None) -> str:
 
 
 async def generate_summary(
+    backend: AIBackend,
     charm_name: str,
     results: list[CheckResult],
     charmcraft_data: dict | None = None,
@@ -273,6 +194,7 @@ async def generate_summary(
     """Generate an AI-powered review summary from check results.
 
     Args:
+        backend: The AI backend to use.
         charm_name: The name of the charm being reviewed.
         results: The list of CheckResult objects from evaluate().
         charmcraft_data: Optional parsed charmcraft.yaml data for additional context.
@@ -280,63 +202,38 @@ async def generate_summary(
     Returns:
         A markdown-formatted summary string, or empty string on failure.
     """
-    passed = sum(1 for r in results if r.passed is True)
-    failed = sum(1 for r in results if r.passed is False)
-    indeterminate = sum(1 for r in results if r.passed is None)
+    prompt = _build_summary_prompt(charm_name, results, charmcraft_data)
 
-    results_text = '\n'.join(
-        f'- [{r.name}] {_status_label(r.passed)}: {r.description}'
-        for r in results
-        if r.description
-    )
-
-    metadata_text = ''
-    if charmcraft_data:
-        for field in ('name', 'title', 'summary', 'description'):
-            value = charmcraft_data.get(field, '')
-            if value:
-                metadata_text += f'\n{field}: {value}'
-        metadata_text = metadata_text[:_MAX_CONTEXT_CHARS]
-
-    prompt = (
-        f'Charm: {charm_name}\n'
-        f'Results: {passed} passed, {failed} failed, {indeterminate} need manual review\n\n'
-        f'Check details:\n{results_text}\n'
-        f'{f"Metadata:{metadata_text}" if metadata_text else ""}\n\n'
-        f"Summarise this charm's readiness for public listing on Charmhub."
-    )
-
-    await start_client()
+    await backend.start()
     try:
-        session = await create_session(REVIEW_SUMMARY_SYSTEM_PROMPT)
-        raw = await asyncio.wait_for(send_prompt(session, prompt), timeout=_LLM_TIMEOUT_SECONDS)
+        raw = await asyncio.wait_for(
+            backend.send_message(REVIEW_SUMMARY_SYSTEM_PROMPT, prompt),
+            timeout=_LLM_TIMEOUT_SECONDS,
+        )
         return _sanitise_ai_output_multiline(raw)
     finally:
-        await stop_client()
+        await backend.stop()
 
 
 async def explain_and_summarise(
+    backend: AIBackend,
     charm_name: str,
     results: list[CheckResult],
     charmcraft_data: dict | None = None,
 ) -> tuple[list[CheckResult], str]:
-    """Run both AI operations in a single event loop.
-
-    This avoids calling ``asyncio.run()`` twice with a cached
-    ``CopilotClient``, which can break if the client holds async state
-    tied to the first event loop.
+    """Run both AI operations in a single backend session.
 
     Returns:
         A tuple of (results_with_explanations, summary_string).
         Either part may be unchanged/empty if that step fails.
     """
-    await start_client()
+    await backend.start()
     try:
         # Explanations first, so the summary can reference them.
         try:
             failed = [r for r in results if r.passed is False]
             if failed:
-                session = await create_session(FAILURE_EXPLANATION_SYSTEM_PROMPT)
+                session = await backend.create_session(FAILURE_EXPLANATION_SYSTEM_PROMPT)
                 for result in failed:
                     context_json = json.dumps(result.context, default=str)[:_MAX_CONTEXT_CHARS]
                     prompt = (
@@ -346,7 +243,7 @@ async def explain_and_summarise(
                         f'\n\nExplain why this failed and how to fix it.'
                     )
                     explanation = await asyncio.wait_for(
-                        send_prompt(session, prompt), timeout=_LLM_TIMEOUT_SECONDS
+                        session.send(prompt), timeout=_LLM_TIMEOUT_SECONDS
                     )
                     result.ai_explanation = _sanitise_ai_output(explanation)
         except Exception:  # noqa: S110
@@ -354,21 +251,36 @@ async def explain_and_summarise(
 
         summary = ''
         try:
-            summary = await _generate_summary_impl(charm_name, results, charmcraft_data)
+            summary = await _generate_summary_impl(backend, charm_name, results, charmcraft_data)
         except Exception:  # noqa: S110
             pass  # AI summary is best-effort.
     finally:
-        await stop_client()
+        await backend.stop()
 
     return results, summary
 
 
 async def _generate_summary_impl(
+    backend: AIBackend,
     charm_name: str,
     results: list[CheckResult],
     charmcraft_data: dict | None = None,
 ) -> str:
-    """Internal implementation of summary generation (without client lifecycle)."""
+    """Internal implementation of summary generation (without lifecycle)."""
+    prompt = _build_summary_prompt(charm_name, results, charmcraft_data)
+    raw = await asyncio.wait_for(
+        backend.send_message(REVIEW_SUMMARY_SYSTEM_PROMPT, prompt),
+        timeout=_LLM_TIMEOUT_SECONDS,
+    )
+    return _sanitise_ai_output_multiline(raw)
+
+
+def _build_summary_prompt(
+    charm_name: str,
+    results: list[CheckResult],
+    charmcraft_data: dict | None = None,
+) -> str:
+    """Build the prompt string for summary generation."""
     passed = sum(1 for r in results if r.passed is True)
     failed = sum(1 for r in results if r.passed is False)
     indeterminate = sum(1 for r in results if r.passed is None)
@@ -387,7 +299,7 @@ async def _generate_summary_impl(
                 metadata_text += f'\n{field}: {value}'
         metadata_text = metadata_text[:_MAX_CONTEXT_CHARS]
 
-    prompt = (
+    return (
         f'Charm: {charm_name}\n'
         f'Results: {passed} passed, {failed} failed, {indeterminate} need manual review\n\n'
         f'Check details:\n{results_text}\n'
@@ -395,15 +307,12 @@ async def _generate_summary_impl(
         f"Summarise this charm's readiness for public listing on Charmhub."
     )
 
-    session = await create_session(REVIEW_SUMMARY_SYSTEM_PROMPT)
-    raw = await asyncio.wait_for(send_prompt(session, prompt), timeout=_LLM_TIMEOUT_SECONDS)
-    return _sanitise_ai_output_multiline(raw)
 
-
-async def assess_documentation(doc_context: dict) -> str:
+async def assess_documentation(backend: AIBackend, doc_context: dict) -> str:
     """Assess the quality of a charm's documentation.
 
     Args:
+        backend: The AI backend to use.
         doc_context: Dictionary with keys like 'readme_content', 'doc_files',
             'documentation_url'.
 
@@ -424,21 +333,22 @@ async def assess_documentation(doc_context: dict) -> str:
     if not readme and not doc_files:
         prompt_parts.append('No README.md or documentation files were found.\n')
 
-    await start_client()
+    await backend.start()
     try:
-        session = await create_session(DOC_QUALITY_SYSTEM_PROMPT)
         raw = await asyncio.wait_for(
-            send_prompt(session, '\n'.join(prompt_parts)), timeout=_LLM_TIMEOUT_SECONDS
+            backend.send_message(DOC_QUALITY_SYSTEM_PROMPT, '\n'.join(prompt_parts)),
+            timeout=_LLM_TIMEOUT_SECONDS,
         )
         return _sanitise_ai_output_multiline(raw)
     finally:
-        await stop_client()
+        await backend.stop()
 
 
-async def assess_metadata(charmcraft_data: dict) -> str:
+async def assess_metadata(backend: AIBackend, charmcraft_data: dict) -> str:
     """Assess the quality of a charm's metadata text fields.
 
     Args:
+        backend: The AI backend to use.
         charmcraft_data: Parsed charmcraft.yaml data.
 
     Returns:
@@ -459,18 +369,12 @@ async def assess_metadata(charmcraft_data: dict) -> str:
         f'Evaluate each field and suggest improvements where needed.'
     )
 
-    await start_client()
+    await backend.start()
     try:
-        session = await create_session(METADATA_QUALITY_SYSTEM_PROMPT)
-        raw = await asyncio.wait_for(send_prompt(session, prompt), timeout=_LLM_TIMEOUT_SECONDS)
+        raw = await asyncio.wait_for(
+            backend.send_message(METADATA_QUALITY_SYSTEM_PROMPT, prompt),
+            timeout=_LLM_TIMEOUT_SECONDS,
+        )
         return _sanitise_ai_output_multiline(raw)
     finally:
-        await stop_client()
-
-
-def print_ai_unavailable_notice():
-    """Print a notice that AI features are disabled."""
-    print(
-        '\nNote: AI-powered features are disabled (Copilot SDK not available).'
-        '\n      Install with: uv sync --group ai'
-    )
+        await backend.stop()
