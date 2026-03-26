@@ -41,7 +41,9 @@ from typing import TypedDict, cast
 
 import yaml
 
-from .ai_backend import resolve_backend
+import sys as _sys
+
+from .ai_backend import print_ai_unavailable_notice, resolve_backend
 from .ai_client import (
     assess_documentation,
     assess_metadata,
@@ -336,6 +338,14 @@ def apply_automated_checks(issue_data: _IssueData, comment: str, ai_backend_choi
     as sub-bullets under failed checklist items, and prepends an AI summary.
     """
     backend = resolve_backend(ai_backend_choice)
+    if backend is None and ai_backend_choice not in ('none', 'auto'):
+        print(
+            f'Warning: AI backend {ai_backend_choice!r} was requested but is not available.',
+            file=_sys.stderr,
+        )
+        print_ai_unavailable_notice()
+    elif backend is None and ai_backend_choice == 'auto':
+        print_ai_unavailable_notice()
 
     evaluation = evaluate(
         issue_data['name'],
@@ -357,29 +367,29 @@ def apply_automated_checks(issue_data: _IssueData, comment: str, ai_backend_choi
             results, ai_summary = asyncio.run(
                 explain_and_summarise(backend, issue_data['name'], results)
             )
-        except Exception:  # noqa: S110
-            pass  # AI features are best-effort.
+        except Exception as exc:  # noqa: BLE001
+            print(f'Warning: AI summary failed: {exc}', file=_sys.stderr)
         if evaluation.doc_context:
             try:
                 ai_doc_assessment = asyncio.run(
                     assess_documentation(backend, evaluation.doc_context)
                 )
-            except Exception:  # noqa: S110
-                pass
+            except Exception as exc:  # noqa: BLE001
+                print(f'Warning: AI doc assessment failed: {exc}', file=_sys.stderr)
         if evaluation.charmcraft_data:
             try:
                 ai_meta_assessment = asyncio.run(
                     assess_metadata(backend, evaluation.charmcraft_data)
                 )
-            except Exception:  # noqa: S110
-                pass
+            except Exception as exc:  # noqa: BLE001
+                print(f'Warning: AI metadata assessment failed: {exc}', file=_sys.stderr)
         if evaluation.code_context.get('code_files'):
             try:
                 ai_code_analysis = asyncio.run(
                     analyse_code(backend, evaluation.code_context['code_files'])
                 )
-            except Exception:  # noqa: S110
-                pass
+            except Exception as exc:  # noqa: BLE001
+                print(f'Warning: AI code analysis failed: {exc}', file=_sys.stderr)
 
     ai_explanations_added = False
     for result in results:

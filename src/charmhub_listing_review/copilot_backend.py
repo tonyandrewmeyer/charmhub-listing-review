@@ -76,9 +76,12 @@ class CopilotBackend:
         if self._client is None:
             msg = 'Backend not started. Call start() first.'
             raise RuntimeError(msg)
+        from copilot import PermissionHandler  # ty: ignore[unresolved-import]
+
         config = {
             'model': 'gpt-4.1',
             'systemMessage': {'content': system_message},
+            'on_permission_request': PermissionHandler.approve_all,
         }
         raw_session = await self._client.create_session(config)
         return CopilotSession(raw_session)
