@@ -107,7 +107,7 @@ A charm's documentation should focus on the charm itself. For workload-specific 
 
     # fmt: on
     try:
-        with urllib.request.urlopen(BEST_PRACTICE_SOURCE) as response:  # noqa: S310
+        with urllib.request.urlopen(BEST_PRACTICE_SOURCE) as response:
             best_practices_content = response.read().decode()
     except (urllib.error.URLError, urllib.error.HTTPError):
         best_practices = []
