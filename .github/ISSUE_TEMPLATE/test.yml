@@ -1,7 +1,39 @@
-name: Test
-description: Test template
+name: Test Listing Request
+description: Test version of the listing request template.
+labels:
+  - listing-request
 body:
   - type: input
-    id: test
+    id: Name
     attributes:
-      label: Test
+      label: Charm name
+      description: "What is the name of the charm, as it appears on Charmhub?"
+      placeholder: myworkload-k8s
+    validations:
+      required: true
+
+  - type: textarea
+    id: Demo
+    attributes:
+      label: Demo
+      description: "Please provide a link to a demo video, or instructions on how to set up a demo over a call, or instructions on installing and trying out the charm via a tutorial."
+      placeholder: "https://www.youtube.com/watch?v=example"
+    validations:
+      required: true
+
+  - type: input
+    id: Repository-Link
+    attributes:
+      label: "Project Repository"
+      description: "Please provide the link to the charm's source code repository."
+    validations:
+      required: true
+
+  - type: input
+    id: Charm-Directory
+    attributes:
+      label: "Charm Directory"
+      description: "For repos with more than one charm: the relative path to the charm directory within the repository (e.g. charms/my-charm). Leave empty if the charm is at the repository root."
+      placeholder: "charms/my-charm"
+    validations:
+      required: false
