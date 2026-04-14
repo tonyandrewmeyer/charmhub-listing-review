@@ -1,0 +1,7 @@
+name: Test
+description: Test template
+body:
+  - type: input
+    id: test
+    attributes:
+      label: Test
