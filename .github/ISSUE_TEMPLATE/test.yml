@@ -75,6 +75,6 @@ body:
     attributes:
       label: "Default Branch"
       description: "If the review should not be against the default branch, specify the correct branch here. Leave blank to use the default branch (typically 'main')."
-      placeholder: 26.04
+      placeholder: "26.04"
     validations:
       required: false
