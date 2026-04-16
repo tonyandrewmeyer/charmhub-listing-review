@@ -30,6 +30,7 @@ lint = [
     "codespell~=2.4",
     "ty",
     "typing_extensions~=4.2",
+    "zizmor~=1.11",
 ]
 unit = [
     "pytest~=9.0",
