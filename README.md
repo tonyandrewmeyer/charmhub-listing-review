@@ -56,6 +56,49 @@ to passing a review. Note that some of the criteria can be checked automatically
 by the reviewer (so you will need to evaluate readiness in those areas
 yourself).
 
+### Self-review tool
+
+Run the self-review tool locally to check your charm against the listing
+requirements before submitting:
+
+```bash
+self-review --charm-name <name> --repository <repo-url>
+```
+
+Optional flags:
+
+| Flag | Description |
+|---|---|
+| `--ai-backend copilot\|snap\|auto\|none` | Choose the AI backend (default: `auto`) |
+
+### AI-powered features
+
+The self-review tool includes optional AI-powered features that provide
+actionable guidance beyond the automated pass/fail checks:
+
+- **Failure explanations** — when checks fail, the AI explains why and suggests
+  specific fixes.
+- **Review summary** — a prioritised overview of the charm's readiness for
+  listing.
+- **Documentation assessment** — evaluates whether the README and docs are
+  clear, complete, and well-structured.
+- **Metadata assessment** — checks whether the `summary`, `description`, and
+  `title` fields in `charmcraft.yaml` are well-written.
+
+AI features require one of two backends:
+
+- **GitHub Copilot** — install with `uv sync --group ai`. Requires the
+  `copilot` CLI tool to be installed and authenticated.
+- **Canonical inference snap** — install a snap such as `sudo snap install
+  gemma3`. The snap runs a local model with an OpenAI-compatible API — no
+  authentication or internet access required. See the
+  [inference snaps documentation](https://documentation.ubuntu.com/inference-snaps/)
+  for available models and hardware requirements. Install Python dependencies
+  for this backend with `uv sync --group snap-ai`.
+
+When neither backend is available, the tool falls back to its standard
+behaviour and all AI sections are omitted.
+
 ## Next steps
 
 If the charm is ready for review,

@@ -336,7 +336,7 @@ review within the next three working days.
 
 def apply_automated_checks(issue_data: _IssueData, comment: str):
     """Adjust the comment to tick items based on automated checks."""
-    results = evaluate(
+    evaluation = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
         issue_data['ci_linting'],
@@ -346,11 +346,12 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['default_branch'],
         charm_dir=issue_data.get('charm_dir', '.'),
     )
-    for result in results:
-        # Convert Sphinx refs in the result to match the converted comment.
-        result = convert_sphinx_refs(result)
-        if result.replace('* [x]', '* [ ]') in comment:
-            comment = comment.replace(result.replace('* [x]', '* [ ]'), result)
+    for result in evaluation.checks:
+        # Convert Sphinx refs in the description to match the converted comment.
+        description = convert_sphinx_refs(result.description)
+        unchecked = description.replace('* [x]', '* [ ]')
+        if unchecked in comment:
+            comment = comment.replace(unchecked, description)
     return comment
 
 

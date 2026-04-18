@@ -5,3 +5,4 @@ rules:
         "actions/*": ref-pin
         "github/*": ref-pin
         "pypa/*": ref-pin
+        "canonical/copilot-collections/*": ref-pin
