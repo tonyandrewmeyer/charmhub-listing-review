@@ -25,6 +25,12 @@ dependencies = [
 ]
 
 [dependency-groups]
+ai = [
+    "github-copilot-sdk",
+]
+snap-ai = [
+    "openai>=1.0",
+]
 lint = [
     "ruff~=0.11",
     "codespell~=2.4",
