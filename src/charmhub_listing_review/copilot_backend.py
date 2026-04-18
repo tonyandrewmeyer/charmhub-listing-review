@@ -78,10 +78,9 @@ class CopilotBackend:
             raise RuntimeError(msg)
         from copilot import PermissionHandler  # ty: ignore[unresolved-import]
 
-        config = {
-            'model': 'gpt-4.1',
-            'systemMessage': {'content': system_message},
-            'on_permission_request': PermissionHandler.approve_all,
-        }
-        raw_session = await self._client.create_session(config)
+        raw_session = await self._client.create_session(
+            model='gpt-4.1',
+            system_message={'content': system_message},
+            on_permission_request=PermissionHandler.approve_all,
+        )
         return CopilotSession(raw_session)
