@@ -44,9 +44,9 @@ To propose adding, changing, or removing a requirement for public listing on Cha
 
 If more information will be required to evaluate the requirement, add a new field to [the issue template](./.github/ISSUE_TEMPLATE/listing-request.yaml). Where possible, the evaluation should use the information on the Charmhub page or in the source repository, to minimise the number of fields required when requesting a review.
 
-If the requirement can be automatically evaluated, add an evaluation method to [the evaluation script](./evaluate.py). We do not use AI/LLM tools for evaluation at this time.
+If the requirement can be automatically evaluated, add an evaluation method to [the evaluation module](./src/charmhub_listing_review/evaluate.py). AI-powered features are available to provide additional guidance beyond pass/fail checks — see the [README](./README.md#ai-powered-features) for details.
 
-If the requirement cannot be automatically evaluated, add it to the [issue script](./update_issue.py), in the part of the script that defines the issue description template.
+If the requirement cannot be automatically evaluated, add it to the [issue module](./src/charmhub_listing_review/update_issue.py), in the part of the script that defines the issue description template.
 
 # Pull requests
 
