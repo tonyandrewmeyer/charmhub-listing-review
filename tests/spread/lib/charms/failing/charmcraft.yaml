@@ -1,0 +1,16 @@
+name: Bad_Charm_Name
+title: Charm Template
+summary: A very short one-line summary of the charm.
+
+requires:
+  database:
+    interface: mysql
+
+actions:
+  Do_Something:
+    description: Does a thing.
+
+config:
+  options:
+    Bad_Option:
+      type: string
