@@ -290,6 +290,65 @@ def test_charm_has_icon(tmp_path):
 
 
 @pytest.mark.parametrize(
+    'parts,expected_checked',
+    [
+        # No parts declared: charmcraft defaults to the `charm` plugin.
+        ('', True),
+        # The `charm` plugin bundles icon.svg automatically.
+        ('parts:\n  charm:\n    plugin: charm\n', True),
+        # Plugin inferred from the `charm` part name.
+        ('parts:\n  charm:\n    source: .\n', True),
+        # A non-charm plugin that explicitly stages the icon.
+        (
+            'parts:\n  files:\n    plugin: dump\n    source: .\n    stage:\n      - icon.svg\n',
+            True,
+        ),
+        # Leading ./ and glob entries also count as staging the icon.
+        ('parts:\n  files:\n    plugin: dump\n    stage:\n      - ./icon.svg\n', True),
+        ('parts:\n  files:\n    plugin: dump\n    prime:\n      - "*.svg"\n', True),
+        # `organize` that renames a file to `icon.svg` at the root.
+        (
+            'parts:\n  files:\n    plugin: dump\n    source: .\n'
+            '    organize:\n      assets/logo.svg: icon.svg\n',
+            True,
+        ),
+        # `organize` that places the icon at the root via a leading ./ prefix.
+        (
+            'parts:\n  files:\n    plugin: dump\n    source: .\n'
+            '    organize:\n      assets/logo.svg: ./icon.svg\n',
+            True,
+        ),
+        # A non-charm plugin that does not stage the icon: it won't be packed.
+        (
+            'parts:\n  files:\n    plugin: dump\n    source: .\n    stage:\n      - foo.txt\n',
+            False,
+        ),
+        ('parts:\n  app:\n    plugin: python\n    source: .\n', False),
+        # `organize` that places icon.svg in a subdirectory: the listing won't pick it up.
+        (
+            'parts:\n  files:\n    plugin: dump\n    source: .\n'
+            '    organize:\n      logo.svg: assets/icon.svg\n',
+            False,
+        ),
+        # `organize` that doesn't touch icon.svg at all.
+        (
+            'parts:\n  files:\n    plugin: dump\n    source: .\n'
+            '    organize:\n      foo.txt: bar.txt\n',
+            False,
+        ),
+    ],
+)
+def test_charm_has_icon_included_in_build(tmp_path, parts, expected_checked):
+    (tmp_path / 'icon.svg').write_text('<svg width="100" height="100"></svg>')
+    (tmp_path / 'charmcraft.yaml').write_text(f'name: test-charm\n{parts}')
+    result = evaluate.charm_has_icon(tmp_path)
+    if expected_checked:
+        assert result.startswith('* [x]')
+    else:
+        assert result.startswith('* [ ]')
+
+
+@pytest.mark.parametrize(
     'yaml_content,link_ok,expected_checked',
     [
         # Success: all fields present, links ok.

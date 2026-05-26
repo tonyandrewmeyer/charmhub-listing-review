@@ -23,7 +23,9 @@ for the reviewer, and is also a way for charm publishers to check their charm
 against the listing requirements before submitting a listing request.
 """
 
+import fnmatch
 import hashlib
+import math
 import pathlib
 import re
 import shutil
@@ -608,19 +610,60 @@ def charm_has_icon(repo_dir: pathlib.Path) -> str:
     width = root.attrib.get('width')
     height = root.attrib.get('height')
     view_box = root.attrib.get('viewBox')
+    correct_size = False
     if width and height:
         width_val = float(width.replace('px', ''))
         height_val = float(height.replace('px', ''))
-        if width_val == 100 and height_val == 100:
-            return description.replace('* [ ]', '* [x]')
+        correct_size = math.isclose(width_val, 100) and math.isclose(height_val, 100)
     elif view_box:
         parts = view_box.strip().split()
         if len(parts) == 4:
-            vb_width = float(parts[2])
-            vb_height = float(parts[3])
-            if vb_width == 100 and vb_height == 100:
-                return description.replace('* [ ]', '* [x]')
-    return description
+            correct_size = math.isclose(float(parts[2]), 100) and math.isclose(
+                float(parts[3]), 100
+            )
+    if not correct_size:
+        return description
+    # Having a valid icon.svg file is not enough on its own: unless the charm
+    # uses the `charm` plugin (which bundles icon.svg automatically), the icon
+    # must be explicitly staged in a part, or it won't show up on the listing.
+    data = _get_charmcraft_yaml(repo_dir)
+    if data is not None and not _icon_included_in_build(data):
+        return description
+    return description.replace('* [ ]', '* [x]')
+
+
+def _icon_included_in_build(charmcraft: dict[Any, Any]) -> bool:
+    """Whether `icon.svg` will be packed into the charm.
+
+    The `charm` plugin bundles `icon.svg` automatically, and is also the default
+    when no parts are declared. Any other plugin must stage (or prime) the icon
+    explicitly for it to appear on the Charmhub listing.
+    """
+    parts = charmcraft.get('parts')
+    if not isinstance(parts, dict) or not parts:
+        # No parts declared: charmcraft defaults to the `charm` plugin.
+        return True
+    for name, part in parts.items():
+        if not isinstance(part, dict):
+            continue
+        # charmcraft infers the plugin from the part name when it isn't given.
+        if part.get('plugin', name) == 'charm':
+            return True
+        for key in ('stage', 'prime'):
+            entries = part.get(key)
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if fnmatch.fnmatch('icon.svg', str(entry).removeprefix('./')):
+                    return True
+        organize = part.get('organize')
+        if isinstance(organize, dict):
+            for dest in organize.values():
+                # charmhub only picks up `icon.svg` at the package root, so an
+                # `organize` dest in a subdirectory doesn't count.
+                if str(dest).removeprefix('./') == 'icon.svg':
+                    return True
+    return False
 
 
 def charm_lib_docs(repo_dir: pathlib.Path) -> str:

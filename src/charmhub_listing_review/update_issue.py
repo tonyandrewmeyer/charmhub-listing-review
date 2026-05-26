@@ -181,7 +181,7 @@ def get_details_from_issue(issue_number: int, repo: str | None = None):
     }
 
     # Extract values for each field.
-    issue_data: dict[str, bool | str | None] = {}
+    issue_data: dict[str, str | None] = {}
     for key, heading in fields.items():
         pattern = rf'{re.escape(heading)}\s*\n([^\n]*)'
         match = re.search(pattern, body)
@@ -198,7 +198,9 @@ def get_details_from_issue(issue_number: int, repo: str | None = None):
     # These have expected filenames, so we use those rather than require the author provide them.
     # This is quite specific to GitHub, but we can add support for other platforms if required,
     # and if they aren't found then the reviewer just has to locate them themselves.
-    project_repo = issue_data.get('project_repo') or ''
+    project_repo = issue_data['project_repo']
+    if not project_repo:
+        raise ValueError('Issue body is missing the "Project Repository" field.')
     default_branch = issue_data.get('default_branch') or get_default_branch(str(project_repo))
     issue_data['default_branch'] = default_branch
     issue_data['contribution_link'] = (
