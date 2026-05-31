@@ -27,9 +27,28 @@ jobs:
           enable-cache: false
       - name: Build
         run: uvx --with=build python -m build
+      - name: Generate CycloneDX SBOM
+        run: |
+          uv sync --frozen --no-dev
+          uvx --from cyclonedx-bom cyclonedx-py environment .venv \
+            --output-format JSON \
+            --output-file sbom.cdx.json
+      # Two separate attestations: SLSA provenance (how it was built)
+      # and CycloneDX SBOM (what's inside). attest-build-provenance
+      # doesn't accept sbom-path, so the SBOM predicate needs its own call.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'dist/*'
+      - name: Attest SBOM
+        uses: actions/attest@v1
+        with:
+          subject-path: 'dist/*'
+          sbom-path: 'sbom.cdx.json'
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
