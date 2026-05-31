@@ -46,7 +46,7 @@ The result of the process is that:
 
 ## Get ready
 
-Read the [documentation](https://documentation.ubuntu.com/ops/latest/howto/request-public-listing/)
+Read the [documentation](https://documentation.ubuntu.com/ops/latest/howto/make-your-charm-discoverable)
 for detailed information about publicly listed charms, the review process, and
 the criteria for public listing.
 
