@@ -154,3 +154,10 @@ builtins-ignorelist = ["id", "min", "map", "range", "type", "input", "format"]
 
 [tool.codespell]
 quiet-level = 3
+
+[tool.ty.rules]
+# Conditional imports for the optional 'ai' and 'snap-ai' groups need
+# `# ty: ignore[unresolved-import]` to pass when those groups aren't
+# installed (e.g. CI lint), but are flagged as unused in environments
+# where they are installed (e.g. local .venv).
+unused-ignore-comment = "ignore"

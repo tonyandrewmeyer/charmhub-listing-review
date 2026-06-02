@@ -386,9 +386,9 @@ def test_charm_has_icon_included_in_build(tmp_path, parts, expected_checked):
     (tmp_path / 'charmcraft.yaml').write_text(f'name: test-charm\n{parts}')
     result = evaluate.charm_has_icon(tmp_path)
     if expected_checked:
-        assert result.startswith('* [x]')
+        assert result.description.startswith('* [x]')
     else:
-        assert result.startswith('* [ ]')
+        assert result.description.startswith('* [ ]')
 
 
 @pytest.mark.parametrize(
