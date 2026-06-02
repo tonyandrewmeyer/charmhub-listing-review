@@ -31,8 +31,13 @@ console in a user-friendly format instead of updating a GitHub issue.
 
 import argparse
 import asyncio
+import contextlib
+import itertools
 import sys
 import textwrap
+import threading
+import time
+from collections.abc import Generator
 
 from .ai_backend import resolve_backend
 from .ai_client import (
@@ -44,6 +49,42 @@ from .ai_client import (
 from .evaluate import CheckResult, EvaluationResult, evaluate, get_default_branch
 from .sphinx_refs import convert_sphinx_refs
 from .update_issue import issue_comment
+
+
+@contextlib.contextmanager
+def _spinner(message: str) -> Generator[None, None, None]:
+    """Display a spinner on stderr while a slow operation runs.
+
+    Does nothing when stderr is not a terminal (e.g. CI environments).
+
+    Args:
+        message: Status message to show next to the spinner.
+    """
+    if not sys.stderr.isatty():
+        yield
+        return
+
+    frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    stop = threading.Event()
+    width = len(message) + 4
+
+    def _run() -> None:
+        for frame in itertools.cycle(frames):
+            if stop.is_set():
+                break
+            sys.stderr.write(f'\r{frame} {message}')
+            sys.stderr.flush()
+            time.sleep(0.1)
+        sys.stderr.write(f'\r{" " * width}\r')
+        sys.stderr.flush()
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 def format_checklist_for_console(
@@ -139,23 +180,25 @@ def print_self_review_results(
 
     if project_repo:
         # Like update-issue, this assumes it's GitHub for now.
-        default_branch = branch or get_default_branch(project_repo, unauthenticated_first=True)
+        with _spinner('Detecting default branch...'):
+            default_branch = branch or get_default_branch(project_repo, unauthenticated_first=True)
         contribution_url = f'{project_repo}/blob/{default_branch}/CONTRIBUTING.md'
         license_url = f'{project_repo}/blob/{default_branch}/LICENSE'
         security_url = f'{project_repo}/blob/{default_branch}/SECURITY.md'
 
         try:
-            evaluation = evaluate(
-                charm_name,
-                project_repo,
-                ci_linting or '',
-                contribution_url,
-                license_url,
-                security_url,
-                branch=default_branch,
-                charm_dir=charm_dir,
-                unauthenticated_first=True,
-            )
+            with _spinner('Cloning repository and running automated checks...'):
+                evaluation = evaluate(
+                    charm_name,
+                    project_repo,
+                    ci_linting or '',
+                    contribution_url,
+                    license_url,
+                    security_url,
+                    branch=default_branch,
+                    charm_dir=charm_dir,
+                    unauthenticated_first=True,
+                )
             results = evaluation.checks
             charmcraft_data = evaluation.charmcraft_data
             doc_context = evaluation.doc_context
@@ -191,9 +234,10 @@ def print_self_review_results(
         ai_summary = ''
         if results and backend is not None:
             try:
-                results, ai_summary = asyncio.run(
-                    explain_and_summarise(backend, charm_name, results)
-                )
+                with _spinner('Getting AI explanations...'):
+                    results, ai_summary = asyncio.run(
+                        explain_and_summarise(backend, charm_name, results)
+                    )
                 for result in results:
                     if result.ai_explanation:
                         description = convert_sphinx_refs(result.description)
@@ -225,7 +269,8 @@ def print_self_review_results(
 
     if backend is not None and doc_context:
         try:
-            doc_assessment = asyncio.run(assess_documentation(backend, doc_context))
+            with _spinner('Assessing documentation with AI...'):
+                doc_assessment = asyncio.run(assess_documentation(backend, doc_context))
             if doc_assessment:
                 print('\n\033[1m📄 AI Documentation Assessment\033[0m')
                 print('-' * 40)
@@ -236,7 +281,8 @@ def print_self_review_results(
 
     if backend is not None and charmcraft_data:
         try:
-            meta_assessment = asyncio.run(assess_metadata(backend, charmcraft_data))
+            with _spinner('Assessing metadata with AI...'):
+                meta_assessment = asyncio.run(assess_metadata(backend, charmcraft_data))
             if meta_assessment:
                 print('\n\033[1m📝 AI Metadata Assessment\033[0m')
                 print('-' * 40)
