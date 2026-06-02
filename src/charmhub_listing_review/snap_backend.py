@@ -69,13 +69,22 @@ class SnapBackend:
         self._model: str = ''
         self._base_url: str = os.environ.get('SNAP_API_URL', '')
 
-    def is_available(self) -> bool:
-        """Check whether an inference snap API is reachable."""
+    def unavailability_reason(self) -> str | None:
+        """Return a human-readable reason why this backend is unavailable, or None if available."""
         try:
             import openai  # noqa: F401  # ty: ignore[unresolved-import]
         except ImportError:
-            return False
-        return self._discover_endpoint() is not None
+            return "the 'openai' package is not installed (run: uv sync --group snap-ai)"
+        if self._discover_endpoint() is None:
+            return (
+                'no inference snap found on localhost'
+                ' (install one, e.g. sudo snap install gemma3, or set SNAP_API_URL)'
+            )
+        return None
+
+    def is_available(self) -> bool:
+        """Check whether an inference snap API is reachable."""
+        return self.unavailability_reason() is None
 
     async def start(self) -> None:
         """Initialise the async OpenAI client."""

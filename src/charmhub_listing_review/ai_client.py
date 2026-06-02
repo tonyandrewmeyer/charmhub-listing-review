@@ -153,6 +153,34 @@ def _sanitise_ai_output_multiline(text: str) -> str:
     return '\n'.join(_sanitise_ai_output(line) for line in text.splitlines())
 
 
+def strip_markdown_for_terminal(text: str) -> str:
+    """Convert markdown-formatted text to terminal-friendly output.
+
+    Un-escapes markdown that was escaped for GitHub embedding, then renders
+    ``**bold**`` as ANSI bold and strips remaining markdown constructs.
+    """
+    lines = []
+    for line in text.splitlines():
+        # Strip heading markers.
+        line = re.sub(r'^#{1,6}\s+', '', line)
+        # Horizontal rules → empty line.
+        if re.match(r'^[-*_]{3,}\s*$', line):
+            lines.append('')
+            continue
+        # Un-escape characters that _sanitise_ai_output escaped for GitHub.
+        line = line.replace(r'\*', '*').replace(r'\_', '_')
+        # Bold: **text** → ANSI bold.
+        line = re.sub(r'\*\*(.+?)\*\*', r'\033[1m\1\033[0m', line)
+        # Italic: *text* → plain text.
+        line = re.sub(r'\*(.+?)\*', r'\1', line)
+        # Italic: _text_ → plain text (only at word boundaries to avoid snake_case).
+        line = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'\1', line)
+        # Inline code: `text` → text.
+        line = re.sub(r'`([^`]+)`', r'\1', line)
+        lines.append(line)
+    return '\n'.join(lines)
+
+
 def _sanitise_ai_output(text: str) -> str:
     """Sanitise LLM output before embedding in GitHub issue comments.
 

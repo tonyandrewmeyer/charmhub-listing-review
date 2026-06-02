@@ -34,11 +34,12 @@ import asyncio
 import sys
 import textwrap
 
-from .ai_backend import print_ai_unavailable_notice, resolve_backend
+from .ai_backend import resolve_backend
 from .ai_client import (
     assess_documentation,
     assess_metadata,
     explain_and_summarise,
+    strip_markdown_for_terminal,
 )
 from .evaluate import CheckResult, EvaluationResult, evaluate, get_default_branch
 from .sphinx_refs import convert_sphinx_refs
@@ -71,7 +72,10 @@ def format_checklist_for_console(
             explanation = ai_explanations.get(unchecked_key)
             if explanation:
                 wrapped = textwrap.fill(
-                    explanation, width=80, initial_indent='    ', subsequent_indent='    '
+                    strip_markdown_for_terminal(explanation),
+                    width=80,
+                    initial_indent='    ',
+                    subsequent_indent='    ',
                 )
                 formatted_lines.append(f'\033[2m{wrapped}\033[0m')  # dim text
         elif line.strip().startswith('* [ ]'):
@@ -98,7 +102,7 @@ def print_self_review_results(
 
     Returns the EvaluationResult if evaluation was performed.
     """
-    backend = resolve_backend(ai_backend_choice)
+    backend, ai_unavailable_reason = resolve_backend(ai_backend_choice)
 
     print(f"\n\033[1m🔍 Charmhub Public Listing Self-Review for '{charm_name}'\033[0m")
     print('=' * (45 + len(charm_name)))
@@ -135,7 +139,7 @@ def print_self_review_results(
 
     if project_repo:
         # Like update-issue, this assumes it's GitHub for now.
-        default_branch = branch or get_default_branch(project_repo)
+        default_branch = branch or get_default_branch(project_repo, unauthenticated_first=True)
         contribution_url = f'{project_repo}/blob/{default_branch}/CONTRIBUTING.md'
         license_url = f'{project_repo}/blob/{default_branch}/LICENSE'
         security_url = f'{project_repo}/blob/{default_branch}/SECURITY.md'
@@ -150,6 +154,7 @@ def print_self_review_results(
                 security_url,
                 branch=default_branch,
                 charm_dir=charm_dir,
+                unauthenticated_first=True,
             )
             results = evaluation.checks
             charmcraft_data = evaluation.charmcraft_data
@@ -194,18 +199,11 @@ def print_self_review_results(
                         description = convert_sphinx_refs(result.description)
                         unchecked_key = description.replace('* [x]', '* [ ]')
                         ai_explanations[unchecked_key] = result.ai_explanation
-            except Exception:  # noqa: S110
-                pass  # AI features are best-effort; don't disrupt the output.
+            except Exception as e:
+                print(f'\n⚠️  Warning: AI explanations failed: {e}')
 
     formatted_checklist = format_checklist_for_console(comment, ai_explanations)
     print(formatted_checklist)
-
-    if ai_explanations:
-        print(
-            '\n\033[33m⚠️  AI output is a suggestion only. '
-            'AI makes mistakes — please check the AI responses carefully '
-            'before acting on them.\033[0m'
-        )
 
     completed_count = comment.count('* [x]')
     failed_count = comment.count('* [o]')
@@ -216,11 +214,14 @@ def print_self_review_results(
         f'{unknown_count} manual review needed\033[0m'
     )
 
+    ai_output_shown = bool(ai_explanations)
+
     # Print AI-driven outputs when available.
     if results and backend is not None and ai_summary:
         print('\n\033[1m🤖 AI Review Summary\033[0m')
         print('-' * 40)
-        print(ai_summary)
+        print(strip_markdown_for_terminal(ai_summary))
+        ai_output_shown = True
 
     if backend is not None and doc_context:
         try:
@@ -228,9 +229,10 @@ def print_self_review_results(
             if doc_assessment:
                 print('\n\033[1m📄 AI Documentation Assessment\033[0m')
                 print('-' * 40)
-                print(doc_assessment)
-        except Exception:  # noqa: S110
-            pass
+                print(strip_markdown_for_terminal(doc_assessment))
+                ai_output_shown = True
+        except Exception as e:
+            print(f'\n⚠️  Warning: AI documentation assessment failed: {e}')
 
     if backend is not None and charmcraft_data:
         try:
@@ -238,12 +240,20 @@ def print_self_review_results(
             if meta_assessment:
                 print('\n\033[1m📝 AI Metadata Assessment\033[0m')
                 print('-' * 40)
-                print(meta_assessment)
-        except Exception:  # noqa: S110
-            pass
+                print(strip_markdown_for_terminal(meta_assessment))
+                ai_output_shown = True
+        except Exception as e:
+            print(f'\n⚠️  Warning: AI metadata assessment failed: {e}')
 
-    if backend is None:
-        print_ai_unavailable_notice()
+    if ai_output_shown:
+        print(
+            '\n\033[33m⚠️  AI output is a suggestion only. '
+            'AI makes mistakes — please check the AI responses carefully '
+            'before acting on them.\033[0m'
+        )
+
+    if backend is None and ai_unavailable_reason:
+        print(f'\n⚠️  {ai_unavailable_reason}')
 
     print('\n💡 Note: This self-review covers automated checks only.')
     print('   A human reviewer will perform additional checks during the official review process.')

@@ -38,6 +38,10 @@ class AISession(typing.Protocol):
 class AIBackend(typing.Protocol):
     """Protocol for AI inference backends."""
 
+    def unavailability_reason(self) -> str | None:
+        """Return a human-readable reason why this backend is unavailable, or None if available."""
+        ...
+
     def is_available(self) -> bool:
         """Check whether this backend is ready to use."""
         ...
@@ -59,49 +63,50 @@ class AIBackend(typing.Protocol):
         ...
 
 
-def resolve_backend(choice: str = 'auto') -> AIBackend | None:
+def resolve_backend(choice: str = 'auto') -> tuple[AIBackend | None, str]:
     """Resolve which AI backend to use.
 
     Args:
-        choice: One of ``'copilot'``, ``'snap'``, or ``'auto'``.
-            ``'auto'`` tries Copilot first, then snap, then returns None.
+        choice: One of ``'copilot'``, ``'snap'``, ``'auto'``, or ``'none'``.
+            ``'auto'`` tries Copilot first, then snap.
             The ``CHARMHUB_REVIEW_AI_BACKEND`` environment variable is used
             as a fallback when *choice* is ``'auto'``.
 
     Returns:
-        An ``AIBackend`` instance, or ``None`` if no backend is available.
+        A ``(backend, reason)`` tuple.  When a backend is available *reason*
+        is an empty string.  When no backend is available *backend* is ``None``
+        and *reason* is a human-readable explanation.  *reason* is also empty
+        when *choice* is ``'none'`` (AI intentionally disabled).
     """
     if choice == 'auto':
         choice = os.environ.get('CHARMHUB_REVIEW_AI_BACKEND', 'auto')
 
     if choice == 'none':
-        return None
+        return None, ''
 
     if choice == 'copilot':
         backend = copilot_backend.CopilotBackend()
-        return backend if backend.is_available() else None
+        reason = backend.unavailability_reason()
+        if reason is None:
+            return backend, ''
+        return None, f'Copilot backend unavailable: {reason}'
 
     if choice == 'snap':
         backend = snap_backend.SnapBackend()
-        return backend if backend.is_available() else None
+        reason = backend.unavailability_reason()
+        if reason is None:
+            return backend, ''
+        return None, f'Snap backend unavailable: {reason}'
 
     # auto: try copilot, then snap.
     copilot = copilot_backend.CopilotBackend()
-    if copilot.is_available():
-        return copilot
+    copilot_reason = copilot.unavailability_reason()
+    if copilot_reason is None:
+        return copilot, ''
 
     snap = snap_backend.SnapBackend()
-    if snap.is_available():
-        return snap
+    snap_reason = snap.unavailability_reason()
+    if snap_reason is None:
+        return snap, ''
 
-    return None
-
-
-def print_ai_unavailable_notice():
-    """Print a notice that AI features are disabled."""
-    print(
-        '\nNote: AI-powered features are disabled (no AI backend available).'
-        '\n      Copilot: install with: uv sync --group ai'
-        '\n      Snap:    install Python deps with: uv sync --group snap-ai'
-        '\n               and an inference snap, e.g. sudo snap install gemma3'
-    )
+    return None, f'No AI backend is available.\n  Copilot: {copilot_reason}\n  Snap: {snap_reason}'

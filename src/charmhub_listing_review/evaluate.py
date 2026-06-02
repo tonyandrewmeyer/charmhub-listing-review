@@ -26,6 +26,7 @@ against the listing requirements before submitting a listing request.
 import fnmatch
 import hashlib
 import math
+import os
 import pathlib
 import re
 import shutil
@@ -40,6 +41,17 @@ import yaml
 
 from ._models import CheckResult, EvaluationResult
 
+# Environment vars for unauthenticated git operations.
+# GIT_TERMINAL_PROMPT=0 prevents HTTPS credential prompts.
+# GIT_CONFIG_NOSYSTEM + GIT_CONFIG_GLOBAL=/dev/null skip user/system config, which may contain
+# url.insteadOf rules that rewrite HTTPS URLs to SSH (requiring key auth even for public repos).
+_NO_PROMPT_ENV = {
+    **os.environ,
+    'GIT_TERMINAL_PROMPT': '0',
+    'GIT_CONFIG_NOSYSTEM': '1',
+    'GIT_CONFIG_GLOBAL': '/dev/null',
+}
+
 
 def evaluate(
     charm_name: str,
@@ -50,6 +62,8 @@ def evaluate(
     security_url: str,
     branch: str = '',
     charm_dir: str = '.',
+    *,
+    unauthenticated_first: bool = False,
 ) -> EvaluationResult:
     """Evaluate the charm for listing on Charmhub.
 
@@ -66,7 +80,7 @@ def evaluate(
         raise ValueError(
             f"charm_dir must be a relative path without '..' components, got: {charm_dir!r}"
         )
-    repo_dir = _clone_repo(repository_url, branch)
+    repo_dir = _clone_repo(repository_url, branch, unauthenticated_first=unauthenticated_first)
     try:
         charm_path = (repo_dir / charm_dir).resolve()
         if not charm_path.is_dir():
@@ -222,42 +236,57 @@ def security_doc(security_url: str) -> CheckResult:
         )
 
 
-def get_default_branch(repository_url: str) -> str:
+def get_default_branch(repository_url: str, *, unauthenticated_first: bool = False) -> str:
     """Get the default branch name for a repository using git ls-remote."""
-    try:
-        result = subprocess.run(
-            ['/usr/bin/git', 'ls-remote', '--symref', repository_url, 'HEAD'],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        for line in result.stdout.splitlines():
-            if line.startswith('ref: refs/heads/'):
-                return line.split('refs/heads/')[1].split()[0]
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, IndexError, ValueError):
-        pass
+    envs: list[dict | None] = []
+    if unauthenticated_first:
+        envs.append(_NO_PROMPT_ENV)
+    envs.append(None)  # None means inherit the current environment (may prompt)
+
+    for env in envs:
+        try:
+            result = subprocess.run(
+                ['/usr/bin/git', 'ls-remote', '--symref', repository_url, 'HEAD'],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5,
+                env=env,
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith('ref: refs/heads/'):
+                    return line.split('refs/heads/')[1].split()[0]
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, IndexError, ValueError):
+            pass
     return 'main'
 
 
-def _clone_repo(charm_repo_url: str, branch: str = '') -> pathlib.Path:
+def _clone_repo(
+    charm_repo_url: str, branch: str = '', *, unauthenticated_first: bool = False
+) -> pathlib.Path:
     """Clone the charm repository to a temporary directory."""
-    temp_dir = tempfile.mkdtemp()
-    try:
+
+    def _attempt(env=None) -> pathlib.Path:
+        temp_dir = tempfile.mkdtemp()
         cmd = ['/usr/bin/git', 'clone', '--depth', '1']
         if branch:
             cmd += ['--branch', branch]
         cmd += [charm_repo_url, temp_dir]
-        subprocess.run(
-            cmd,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return pathlib.Path(temp_dir)
-    except subprocess.CalledProcessError:
-        shutil.rmtree(temp_dir)
-        raise
+        try:
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
+            )
+            return pathlib.Path(temp_dir)
+        except subprocess.CalledProcessError:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+
+    if unauthenticated_first:
+        try:
+            return _attempt(_NO_PROMPT_ENV)
+        except subprocess.CalledProcessError:
+            pass
+    return _attempt()
 
 
 def _get_charmcraft_yaml(repo_dir: pathlib.Path) -> dict[Any, Any] | None:

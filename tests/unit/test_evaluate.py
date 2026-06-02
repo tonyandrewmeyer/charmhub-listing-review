@@ -46,6 +46,31 @@ class TestGetDefaultBranch:
     def test_falls_back_to_main_on_timeout(self, mock_run):
         assert evaluate.get_default_branch('https://github.com/org/repo') == 'main'
 
+    @mock.patch('subprocess.run')
+    def test_unauthenticated_first_succeeds_without_fallback(self, mock_run):
+        mock_run.return_value = mock.Mock(stdout='ref: refs/heads/main\tHEAD\nabc123\tHEAD\n')
+        result = evaluate.get_default_branch(
+            'https://github.com/org/repo', unauthenticated_first=True
+        )
+        assert result == 'main'
+        assert mock_run.call_count == 1
+        assert mock_run.call_args[1]['env'].get('GIT_TERMINAL_PROMPT') == '0'
+        assert mock_run.call_args[1]['env'].get('GIT_CONFIG_GLOBAL') == '/dev/null'
+        assert mock_run.call_args[1]['env'].get('GIT_CONFIG_NOSYSTEM') == '1'
+
+    @mock.patch('subprocess.run')
+    def test_unauthenticated_first_falls_back_on_failure(self, mock_run):
+        mock_run.side_effect = [
+            subprocess.CalledProcessError(128, 'git'),
+            mock.Mock(stdout='ref: refs/heads/main\tHEAD\nabc123\tHEAD\n'),
+        ]
+        result = evaluate.get_default_branch(
+            'https://github.com/org/repo', unauthenticated_first=True
+        )
+        assert result == 'main'
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[1][1]['env'] is None
+
 
 class TestEvaluateCharmDir:
     """Test that evaluate() correctly handles the charm_dir parameter."""
@@ -133,6 +158,23 @@ class TestCloneRepo:
         evaluate._clone_repo('https://github.com/org/repo', branch='')
         cmd = mock_run.call_args[0][0]
         assert '--branch' not in cmd
+
+    @mock.patch('subprocess.run')
+    def test_unauthenticated_first_succeeds_without_fallback(self, mock_run):
+        evaluate._clone_repo('https://github.com/org/repo', unauthenticated_first=True)
+        assert mock_run.call_count == 1
+        env = mock_run.call_args[1]['env']
+        assert env.get('GIT_TERMINAL_PROMPT') == '0'
+        assert env.get('GIT_CONFIG_GLOBAL') == '/dev/null'
+        assert env.get('GIT_CONFIG_NOSYSTEM') == '1'
+
+    @mock.patch('subprocess.run')
+    def test_unauthenticated_first_falls_back_on_failure(self, mock_run):
+        mock_run.side_effect = [subprocess.CalledProcessError(128, 'git'), mock.DEFAULT]
+        evaluate._clone_repo('https://github.com/org/repo', unauthenticated_first=True)
+        assert mock_run.call_count == 2
+        # Second call should use the default env (None)
+        assert mock_run.call_args_list[1][1]['env'] is None
 
 
 @pytest.mark.parametrize(

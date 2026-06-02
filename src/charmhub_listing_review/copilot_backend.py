@@ -22,12 +22,17 @@ import shutil
 class CopilotSession:
     """Multi-turn conversation session backed by the Copilot SDK."""
 
-    def __init__(self, session):
+    def __init__(self, session, system_message: str = ''):
         self._session = session
+        self._system_message = system_message
+        self._first_send = True
 
     async def send(self, prompt: str) -> str:
         """Send a prompt and return the response text."""
-        response = await self._session.send_and_wait({'prompt': prompt})
+        if self._first_send and self._system_message:
+            prompt = f'{self._system_message}\n\n{prompt}'
+            self._first_send = False
+        response = await self._session.send_and_wait(prompt)
         if response and response.data and response.data.content:
             return response.data.content
         return ''
@@ -43,15 +48,19 @@ class CopilotBackend:
     def __init__(self):
         self._client = None
 
-    def is_available(self) -> bool:
-        """Check whether the Copilot SDK and CLI are available."""
+    def unavailability_reason(self) -> str | None:
+        """Return a human-readable reason why this backend is unavailable, or None if available."""
         try:
             import copilot  # noqa: F401  # ty: ignore[unresolved-import]
         except ImportError:
-            return False
+            return "the 'github-copilot-sdk' package is not installed (run: uv sync --group ai)"
         if not shutil.which('copilot'):
-            return False
-        return True
+            return "the 'copilot' CLI is not in PATH"
+        return None
+
+    def is_available(self) -> bool:
+        """Check whether the Copilot SDK and CLI are available."""
+        return self.unavailability_reason() is None
 
     async def start(self) -> None:
         """Start the Copilot client."""
@@ -76,11 +85,9 @@ class CopilotBackend:
         if self._client is None:
             msg = 'Backend not started. Call start() first.'
             raise RuntimeError(msg)
-        from copilot import PermissionHandler  # ty: ignore[unresolved-import]
+        from copilot.session import PermissionHandler  # ty: ignore[unresolved-import]
 
         raw_session = await self._client.create_session(
-            model='gpt-4.1',
-            system_message={'content': system_message},
             on_permission_request=PermissionHandler.approve_all,
         )
-        return CopilotSession(raw_session)
+        return CopilotSession(raw_session, system_message)

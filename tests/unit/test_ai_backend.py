@@ -23,57 +23,88 @@ from charmhub_listing_review import ai_backend, copilot_backend, snap_backend
 class TestResolveBackend:
     def test_auto_returns_none_when_nothing_available(self):
         with (
-            mock.patch.object(copilot_backend.CopilotBackend, 'is_available', return_value=False),
-            mock.patch.object(snap_backend.SnapBackend, 'is_available', return_value=False),
+            mock.patch.object(
+                copilot_backend.CopilotBackend, 'unavailability_reason', return_value='no copilot'
+            ),
+            mock.patch.object(
+                snap_backend.SnapBackend, 'unavailability_reason', return_value='no snap'
+            ),
             mock.patch.dict('os.environ', {}, clear=True),
         ):
-            result = ai_backend.resolve_backend('auto')
-        assert result is None
+            backend, reason = ai_backend.resolve_backend('auto')
+        assert backend is None
+        assert 'no copilot' in reason
+        assert 'no snap' in reason
 
     def test_auto_prefers_copilot(self):
         with (
-            mock.patch.object(copilot_backend.CopilotBackend, 'is_available', return_value=True),
+            mock.patch.object(
+                copilot_backend.CopilotBackend, 'unavailability_reason', return_value=None
+            ),
             mock.patch.dict('os.environ', {}, clear=True),
         ):
-            result = ai_backend.resolve_backend('auto')
-        assert isinstance(result, copilot_backend.CopilotBackend)
+            backend, reason = ai_backend.resolve_backend('auto')
+        assert isinstance(backend, copilot_backend.CopilotBackend)
+        assert reason == ''
 
     def test_auto_falls_back_to_snap(self):
         with (
-            mock.patch.object(copilot_backend.CopilotBackend, 'is_available', return_value=False),
-            mock.patch.object(snap_backend.SnapBackend, 'is_available', return_value=True),
+            mock.patch.object(
+                copilot_backend.CopilotBackend, 'unavailability_reason', return_value='no copilot'
+            ),
+            mock.patch.object(
+                snap_backend.SnapBackend, 'unavailability_reason', return_value=None
+            ),
             mock.patch.dict('os.environ', {}, clear=True),
         ):
-            result = ai_backend.resolve_backend('auto')
-        assert isinstance(result, snap_backend.SnapBackend)
+            backend, reason = ai_backend.resolve_backend('auto')
+        assert isinstance(backend, snap_backend.SnapBackend)
+        assert reason == ''
 
     def test_explicit_copilot(self):
-        with mock.patch.object(copilot_backend.CopilotBackend, 'is_available', return_value=True):
-            result = ai_backend.resolve_backend('copilot')
-        assert isinstance(result, copilot_backend.CopilotBackend)
+        with mock.patch.object(
+            copilot_backend.CopilotBackend, 'unavailability_reason', return_value=None
+        ):
+            backend, reason = ai_backend.resolve_backend('copilot')
+        assert isinstance(backend, copilot_backend.CopilotBackend)
+        assert reason == ''
 
     def test_explicit_copilot_unavailable(self):
-        with mock.patch.object(copilot_backend.CopilotBackend, 'is_available', return_value=False):
-            result = ai_backend.resolve_backend('copilot')
-        assert result is None
+        with mock.patch.object(
+            copilot_backend.CopilotBackend, 'unavailability_reason', return_value='not installed'
+        ):
+            backend, reason = ai_backend.resolve_backend('copilot')
+        assert backend is None
+        assert 'Copilot' in reason
+        assert 'not installed' in reason
 
     def test_explicit_snap(self):
-        with mock.patch.object(snap_backend.SnapBackend, 'is_available', return_value=True):
-            result = ai_backend.resolve_backend('snap')
-        assert isinstance(result, snap_backend.SnapBackend)
+        with mock.patch.object(
+            snap_backend.SnapBackend, 'unavailability_reason', return_value=None
+        ):
+            backend, reason = ai_backend.resolve_backend('snap')
+        assert isinstance(backend, snap_backend.SnapBackend)
+        assert reason == ''
 
     def test_explicit_snap_unavailable(self):
-        with mock.patch.object(snap_backend.SnapBackend, 'is_available', return_value=False):
-            result = ai_backend.resolve_backend('snap')
-        assert result is None
+        with mock.patch.object(
+            snap_backend.SnapBackend, 'unavailability_reason', return_value='no endpoint'
+        ):
+            backend, reason = ai_backend.resolve_backend('snap')
+        assert backend is None
+        assert 'Snap' in reason
+        assert 'no endpoint' in reason
 
     def test_env_var_overrides_auto(self):
         with (
             mock.patch.dict('os.environ', {'CHARMHUB_REVIEW_AI_BACKEND': 'snap'}),
-            mock.patch.object(snap_backend.SnapBackend, 'is_available', return_value=True),
+            mock.patch.object(
+                snap_backend.SnapBackend, 'unavailability_reason', return_value=None
+            ),
         ):
-            result = ai_backend.resolve_backend('auto')
-        assert isinstance(result, snap_backend.SnapBackend)
+            backend, reason = ai_backend.resolve_backend('auto')
+        assert isinstance(backend, snap_backend.SnapBackend)
+        assert reason == ''
 
 
 class TestCopilotBackend:
