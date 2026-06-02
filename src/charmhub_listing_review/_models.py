@@ -32,10 +32,7 @@ class CheckResult:
     """The markdown checklist line, e.g. '* [x] The charm has an icon.'"""
 
     context: dict[str, Any] = dataclasses.field(default_factory=dict)
-    """Extra data for AI analysis (e.g. {"url": "...", "status_code": 404})."""
-
-    ai_explanation: str = ''
-    """AI-generated explanation for failed checks, populated by ai_client."""
+    """Extra check-specific data (e.g. {"url": "...", "status_code": 404})."""
 
 
 @dataclasses.dataclass

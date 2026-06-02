@@ -38,50 +38,7 @@ def _make_mock_backend(response='Fix by doing X.'):
     return backend
 
 
-def test_explain_failures_populates_explanations():
-    """explain_failures sends prompts for failed checks and populates ai_explanation."""
-    results = [
-        _make_result('check_a', passed=True),
-        _make_result('check_b', passed=False, url='https://example.com'),
-        _make_result('check_c', passed=None),
-        _make_result('check_d', passed=False, error='not found'),
-    ]
-
-    backend = _make_mock_backend()
-    updated = asyncio.run(ai_client.explain_failures(backend, results))
-
-    # Only failed checks get explanations.
-    assert updated[0].ai_explanation == ''  # passed=True
-    assert updated[1].ai_explanation == 'Fix by doing X.'  # passed=False
-    assert updated[2].ai_explanation == ''  # passed=None
-    assert updated[3].ai_explanation == 'Fix by doing X.'  # passed=False
-
-
-def test_explain_failures_no_failures_skips_ai():
-    """explain_failures returns results unchanged when nothing failed."""
-    results = [
-        _make_result('check_a', passed=True),
-        _make_result('check_b', passed=None),
-    ]
-
-    backend = _make_mock_backend()
-    updated = asyncio.run(ai_client.explain_failures(backend, results))
-
-    backend.start.assert_not_called()
-    assert updated is results
-
-
-def test_format_checklist_with_ai_explanations():
-    checklist = '* [o] The charm provides a license statement.'
-    explanations = {
-        '* [ ] The charm provides a license statement.': 'Your LICENSE file was not recognised.',
-    }
-    output = format_checklist_for_console(checklist, ai_explanations=explanations)
-    assert 'Your LICENSE file was not recognised.' in output
-    assert '\u274c' in output
-
-
-def test_format_checklist_without_ai_explanations():
+def test_format_checklist_failed_renders_cross():
     checklist = '* [o] The charm provides a license statement.'
     output = format_checklist_for_console(checklist)
     assert '\u274c' in output

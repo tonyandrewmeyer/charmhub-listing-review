@@ -76,8 +76,6 @@ Optional flags:
 The self-review tool includes optional AI-powered features that provide
 actionable guidance beyond the automated pass/fail checks:
 
-- **Failure explanations** — when checks fail, the AI explains why and suggests
-  specific fixes.
 - **Review summary** — a prioritised overview of the charm's readiness for
   listing.
 - **Documentation assessment** — evaluates whether the README and docs are

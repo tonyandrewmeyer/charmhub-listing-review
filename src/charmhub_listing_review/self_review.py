@@ -34,7 +34,6 @@ import asyncio
 import contextlib
 import itertools
 import sys
-import textwrap
 import threading
 import time
 from collections.abc import Generator
@@ -43,7 +42,7 @@ from .ai_backend import resolve_backend
 from .ai_client import (
     assess_documentation,
     assess_metadata,
-    explain_and_summarise,
+    generate_summary,
     strip_markdown_for_terminal,
 )
 from .evaluate import CheckResult, EvaluationResult, evaluate, get_default_branch
@@ -87,18 +86,8 @@ def _spinner(message: str) -> Generator[None, None, None]:
         thread.join()
 
 
-def format_checklist_for_console(
-    checklist_markdown: str,
-    ai_explanations: dict[str, str] | None = None,
-) -> str:
-    """Format the markdown checklist for console output.
-
-    Args:
-        checklist_markdown: The markdown checklist string.
-        ai_explanations: Optional mapping of unchecked description -> AI explanation.
-    """
-    if ai_explanations is None:
-        ai_explanations = {}
+def format_checklist_for_console(checklist_markdown: str) -> str:
+    """Format the markdown checklist for console output."""
     lines = checklist_markdown.split('\n')
     formatted_lines = []
     for line in lines:
@@ -108,17 +97,6 @@ def format_checklist_for_console(
         elif line.strip().startswith('* [o]'):
             item_text = line.replace('* [o]', '').strip()
             formatted_lines.append(f' ❌ {item_text}')
-            # Show AI explanation if available for this failed check.
-            unchecked_key = line.strip().replace('* [o]', '* [ ]')
-            explanation = ai_explanations.get(unchecked_key)
-            if explanation:
-                wrapped = textwrap.fill(
-                    strip_markdown_for_terminal(explanation),
-                    width=80,
-                    initial_indent='    ',
-                    subsequent_indent='    ',
-                )
-                formatted_lines.append(f'\033[2m{wrapped}\033[0m')  # dim text
         elif line.strip().startswith('* [ ]'):
             item_text = line.replace('* [ ]', '').strip()
             formatted_lines.append(f' ❓ {item_text}')
@@ -176,7 +154,6 @@ def print_self_review_results(
     results: list[CheckResult] = []
     charmcraft_data: dict | None = None
     doc_context: dict = {}
-    ai_explanations: dict[str, str] = {}
 
     if project_repo:
         # Like update-issue, this assumes it's GitHub for now.
@@ -230,23 +207,15 @@ def print_self_review_results(
             else:
                 print(f'   Error details: {e}')
 
-        # Run AI explanations and summary in a single event loop (best-effort).
         ai_summary = ''
         if results and backend is not None:
             try:
-                with _spinner('Getting AI explanations...'):
-                    results, ai_summary = asyncio.run(
-                        explain_and_summarise(backend, charm_name, results)
-                    )
-                for result in results:
-                    if result.ai_explanation:
-                        description = convert_sphinx_refs(result.description)
-                        unchecked_key = description.replace('* [x]', '* [ ]')
-                        ai_explanations[unchecked_key] = result.ai_explanation
+                with _spinner('Generating AI review summary...'):
+                    ai_summary = asyncio.run(generate_summary(backend, charm_name, results))
             except Exception as e:
-                print(f'\n⚠️  Warning: AI explanations failed: {e}')
+                print(f'\n⚠️  Warning: AI review summary failed: {e}')
 
-    formatted_checklist = format_checklist_for_console(comment, ai_explanations)
+    formatted_checklist = format_checklist_for_console(comment)
     print(formatted_checklist)
 
     completed_count = comment.count('* [x]')
@@ -258,7 +227,7 @@ def print_self_review_results(
         f'{unknown_count} manual review needed\033[0m'
     )
 
-    ai_output_shown = bool(ai_explanations)
+    ai_output_shown = False
 
     # Print AI-driven outputs when available.
     if results and backend is not None and ai_summary:
