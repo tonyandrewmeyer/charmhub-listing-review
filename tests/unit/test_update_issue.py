@@ -19,6 +19,7 @@ import pathlib
 from unittest import mock
 
 import charmhub_listing_review.update_issue as update_issue
+from charmhub_listing_review.evaluate import CheckResult, EvaluationResult
 
 
 @mock.patch('random.choice')
@@ -263,3 +264,44 @@ def test_issue_summary():
     name = 'my-charm'
     summary = update_issue.issue_summary(name)
     assert summary == 'Review `my-charm` for public listing on Charmhub'
+
+
+def _make_issue_data(**overrides):
+    defaults = {
+        'name': 'my-charm',
+        'demo_url': 'https://demo.example.com',
+        'project_repo': 'https://github.com/canonical/my-charm',
+        'ci_linting': 'https://ci.example.com/lint',
+        'ci_release_url': 'https://ci.example.com/release',
+        'ci_integration_url': 'https://ci.example.com/integration',
+        'documentation_link': 'https://docs.example.com',
+        'contribution_link': 'https://github.com/canonical/my-charm/blob/main/CONTRIBUTING.md',
+        'license_link': 'https://github.com/canonical/my-charm/blob/main/LICENSE',
+        'security_link': 'https://github.com/canonical/my-charm/blob/main/SECURITY.md',
+        'default_branch': 'main',
+        'charm_dir': '.',
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+def _make_evaluation(checks):
+    """Create a mock EvaluationResult with the given checks."""
+    return EvaluationResult(checks=checks)
+
+
+def test_apply_automated_checks_ticks_passed():
+    """apply_automated_checks replaces unchecked items with checked for passing results."""
+    result = CheckResult(
+        name='license',
+        passed=True,
+        description='* [x] The charm provides a license statement.',
+        context={},
+    )
+    comment = '* [ ] The charm provides a license statement.'
+    with mock.patch(
+        'charmhub_listing_review.update_issue.evaluate',
+        return_value=_make_evaluation([result]),
+    ):
+        output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    assert '* [x] The charm provides a license statement.' in output

@@ -61,7 +61,7 @@ class TestEvaluateCharmDir:
         )
         (charm_subdir / 'pyproject.toml').write_text('[project]\nrequires-python = ">=3.10"\n')
         mock_clone.return_value = tmp_path
-        results = evaluate.evaluate(
+        evaluation = evaluate.evaluate(
             charm_name='my-charm',
             repository_url='https://github.com/org/my-charm-operator',
             linting_url='',
@@ -71,11 +71,9 @@ class TestEvaluateCharmDir:
             charm_dir='charms/my-charm',
         )
         # python_requires_version should pass because pyproject.toml is in the subdirectory.
-        python_result = [
-            r for r in results if 'requires-python' in r.lower() or 'requires_python' in r.lower()
-        ]
+        python_result = [r for r in evaluation.checks if r.name == 'python_requires_version']
         assert python_result
-        assert python_result[0].startswith('* [x]')
+        assert python_result[0].passed is True
 
     def test_evaluate_rejects_absolute_charm_dir(self):
         with pytest.raises(ValueError, match='relative path'):
@@ -167,7 +165,7 @@ config:
 """
     charmcraft_yaml.write_text(yaml_content)
     result = getattr(evaluate, method)(tmp_path)
-    assert (result.startswith('* [x]')) == expected
+    assert result.passed == expected
 
 
 @pytest.mark.parametrize(
@@ -179,7 +177,7 @@ config:
 )
 def test_check_charm_name(charm_name, expected):
     result = evaluate.check_charm_name(charm_name)
-    assert (result.startswith('* [x]')) == expected
+    assert result.passed == expected
 
 
 @mock.patch('charmhub_listing_review.evaluate._url_ok')
@@ -187,7 +185,7 @@ def test_check_charm_name(charm_name, expected):
 def test_contribution_guidelines(mock_url_ok, status, expected):
     mock_url_ok.return_value = status
     result = evaluate.contribution_guidelines('url')
-    assert (result.startswith('* [x]')) == expected
+    assert result.passed == expected
 
 
 @mock.patch('charmhub_listing_review.evaluate._fetch_url')
@@ -197,18 +195,18 @@ def test_license_statement_known_license(mock_fetch, license_hash):
     with mock.patch('hashlib.sha512') as mock_hash:
         mock_hash.return_value.hexdigest.return_value = license_hash
         result = evaluate.license_statement('url')
-        assert result.startswith('* [x]')
+        assert result.passed is True
 
 
 @mock.patch('charmhub_listing_review.evaluate._fetch_url')
 def test_license_statement_fails(mock_fetch):
     mock_fetch.return_value = None
     result = evaluate.license_statement('url')
-    assert result.startswith('* [ ]')
+    assert result.passed is False
 
     mock_fetch.return_value = 'Some Unknown License'
     result = evaluate.license_statement('url')
-    assert result.startswith('* [ ]')
+    assert result.passed is False
 
 
 @mock.patch('charmhub_listing_review.evaluate._url_ok')
@@ -216,7 +214,7 @@ def test_license_statement_fails(mock_fetch):
 def test_security_doc(mock_url_ok, status, expected):
     mock_url_ok.return_value = status
     result = evaluate.security_doc('url')
-    assert result.startswith('* [x]') == expected
+    assert result.passed == expected
 
 
 @pytest.mark.parametrize(
@@ -228,7 +226,7 @@ def test_security_doc(mock_url_ok, status, expected):
 )
 def test_repository_name(url, charm_name, expected):
     result = evaluate.repository_name(url, charm_name)
-    assert (result.startswith('* [x]')) == expected
+    assert result.passed == expected
 
 
 def test_python_requires_version(tmp_path):
@@ -238,7 +236,7 @@ def test_python_requires_version(tmp_path):
     requires-python = ">=3.10"
     """)
     result = evaluate.python_requires_version(tmp_path)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
 
 def test_missing_python_requires_version(tmp_path):
@@ -248,7 +246,7 @@ def test_missing_python_requires_version(tmp_path):
     name = "foo"
     """)
     result = evaluate.python_requires_version(tmp_path)
-    assert result.startswith('* [ ]')
+    assert result.passed is False
 
 
 @pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
@@ -256,28 +254,28 @@ def test_repo_has_lock_file(tmp_path, lock_file):
     (tmp_path / 'pyproject.toml').write_text("[project]\nname = 'foo'\n")
     (tmp_path / lock_file).write_text('lock')
     result = evaluate.repo_has_lock_file(tmp_path)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
     tmp2 = tmp_path / 'no_repo'
     tmp2.mkdir()
     (tmp2 / 'pyproject.toml').write_text("[project]\nname = 'foo'\n")
     result = evaluate.repo_has_lock_file(tmp2)
-    assert result.startswith('* [ ]')
+    assert result.passed is False
 
 
 def test_charm_has_icon(tmp_path):
     icon = tmp_path / 'icon.svg'
     icon.write_text('<svg width="100" height="100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
     icon.write_text('<svg viewBox="0 0 100 100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
     icon.write_text('<svg width="99" height="99"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
-    assert result.startswith('* [ ]')
+    assert result.passed is False
 
 
 @pytest.mark.parametrize(
@@ -334,9 +332,9 @@ def test_charm_has_icon_included_in_build(tmp_path, parts, expected_checked):
     (tmp_path / 'charmcraft.yaml').write_text(f'name: test-charm\n{parts}')
     result = evaluate.charm_has_icon(tmp_path)
     if expected_checked:
-        assert result.startswith('* [x]')
+        assert result.description.startswith('* [x]')
     else:
-        assert result.startswith('* [ ]')
+        assert result.description.startswith('* [ ]')
 
 
 @pytest.mark.parametrize(
@@ -419,7 +417,7 @@ def test_metadata_links_parametrized(
     charmcraft_yaml.write_text(yaml_content)
     mock_url_ok.return_value = link_ok
     result = evaluate.metadata_links(tmp_path)
-    assert (result.startswith('* [x]')) == expected_checked
+    assert result.passed == expected_checked
 
 
 def test_check_action_names_monorepo(tmp_path):
@@ -433,7 +431,7 @@ actions:
     valid-action: {}
 """)
     result = evaluate.action_names(charm_dir)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
 
 def test_python_requires_version_monorepo(tmp_path):
@@ -446,7 +444,7 @@ def test_python_requires_version_monorepo(tmp_path):
 requires-python = ">=3.10"
 """)
     result = evaluate.python_requires_version(charm_dir)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
 
 def test_charm_has_icon_monorepo(tmp_path):
@@ -456,7 +454,7 @@ def test_charm_has_icon_monorepo(tmp_path):
     icon = charm_dir / 'icon.svg'
     icon.write_text('<svg width="100" height="100"></svg>')
     result = evaluate.charm_has_icon(charm_dir)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
 
 @pytest.mark.parametrize(
@@ -518,4 +516,4 @@ def test_relations_includes_optional(tmp_path, yaml_content, expected_checked):
     charmcraft_yaml = tmp_path / 'charmcraft.yaml'
     charmcraft_yaml.write_text(yaml_content)
     result = evaluate.relations_includes_optional(tmp_path)
-    assert (result.startswith('* [x]')) == expected_checked
+    assert result.passed == expected_checked

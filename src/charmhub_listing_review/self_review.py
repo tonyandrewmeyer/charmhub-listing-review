@@ -102,7 +102,7 @@ def print_self_review_results(
         security_url = f'{project_repo}/blob/{default_branch}/SECURITY.md'
 
         try:
-            results = evaluate(
+            evaluation = evaluate(
                 charm_name,
                 project_repo,
                 ci_linting or '',
@@ -113,21 +113,19 @@ def print_self_review_results(
                 charm_dir=charm_dir,
             )
 
-            automated_checks = set()
-            for result in results:
-                if not result:
+            for result in evaluation.checks:
+                if not result.description:
                     continue
 
-                unchecked_version = result.replace('* [x]', '* [ ]')
-                automated_checks.add(unchecked_version)
-                if unchecked_version in comment:
-                    if result.startswith('* [x]'):
-                        comment = comment.replace(unchecked_version, result)
-                    else:
-                        failed_version = unchecked_version.replace('* [ ]', '* [o]')
-                        comment = comment.replace(unchecked_version, failed_version)
-
-            # For checks that weren't automated, we already leave them as '* [ ]' (unknown)
+                unchecked_version = result.description.replace('* [x]', '* [ ]')
+                if unchecked_version not in comment:
+                    continue
+                if result.passed is True:
+                    comment = comment.replace(unchecked_version, result.description)
+                elif result.passed is False:
+                    failed_version = unchecked_version.replace('* [ ]', '* [o]')
+                    comment = comment.replace(unchecked_version, failed_version)
+                # passed is None: leave as '* [ ]' (unknown / not automated)
         except Exception as e:
             print('\n⚠️  Warning: Could not run automated checks on repository.')
             print(
