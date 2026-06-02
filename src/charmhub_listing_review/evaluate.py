@@ -351,6 +351,8 @@ def check_charm_name(charm_name: str) -> CheckResult:
     The charm's name is lowercase alphanumeric, with hyphens (-) to separate
     words. The charm name is not the same as the repository name.
     """
+    # TODO: set checklist_id once canonical/charmcraft adds `:name:` to its
+    # 'charm name slug-oriented' best practice admonition.
     # This has to match the description in the Charmcraft documentation.
     description = re.sub(
         r'\s+',
@@ -384,6 +386,8 @@ def action_names(repo_dir: pathlib.Path) -> CheckResult:
     The repository contains a `charmcraft.yaml` file that includes an actions
     field, and each action is named appropriately.
     """
+    # TODO: set checklist_id once canonical/charmcraft adds `:name:` to its
+    # 'lowercase alphanumeric action names' best practice admonition.
     # This has to match the description in the Charmcraft documentation.
     description = re.sub(
         r'\s+',
@@ -429,6 +433,8 @@ def option_names(repo_dir: pathlib.Path) -> CheckResult:
     field, itself containing an options field, and each option is named
     appropriately.
     """
+    # TODO: set checklist_id once canonical/charmcraft adds `:name:` to its
+    # 'lowercase alphanumeric option names' best practice admonition.
     # This has to match the description in the Charmcraft documentation.
     description = re.sub(
         r'\s+',
@@ -489,6 +495,7 @@ def repository_name(repository_url: str, charm_name: str) -> CheckResult:
         passed=passed,
         description=description.replace('* [ ]', '* [x]') if passed else description,
         context={'repo_name': repo_name, 'charm_name': charm_name},
+        checklist_id='best-practice-repository-naming',
     )
 
 
@@ -503,6 +510,9 @@ def relations_includes_optional(repo_dir: pathlib.Path) -> CheckResult:
     The charm's relations are defined in the `charmcraft.yaml` file, in requires
     and provides fields, and each relation includes the `optional` key.
     """
+    # TODO: set checklist_id once canonical/charmcraft adds `:name:` to its
+    # 'include the optional key in all endpoint definitions' best practice
+    # admonition.
     # This has to match the description in the Charmcraft documentation.
     description = re.sub(
         r'\s+',
@@ -569,7 +579,11 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> CheckResult:
     else:
         context['error'] = 'no tooling file found (Makefile, Justfile, or tox.ini)'
         return CheckResult(
-            name='charmcraft_tooling', passed=False, description=description, context=context
+            name='charmcraft_tooling',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='best-practice-charmcraft-profile-commands',
         )
 
     # Check for commands in the files
@@ -608,7 +622,11 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> CheckResult:
         except (subprocess.CalledProcessError, FileNotFoundError):
             context['failed_command'] = command
             return CheckResult(
-                name='charmcraft_tooling', passed=False, description=description, context=context
+                name='charmcraft_tooling',
+                passed=False,
+                description=description,
+                context=context,
+                checklist_id='best-practice-charmcraft-profile-commands',
             )
 
     if all(command in found_commands for command in commands):
@@ -617,9 +635,14 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='best-practice-charmcraft-profile-commands',
         )
     return CheckResult(
-        name='charmcraft_tooling', passed=False, description=description, context=context
+        name='charmcraft_tooling',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='best-practice-charmcraft-profile-commands',
     )
 
 
@@ -680,7 +703,11 @@ def python_requires_version(repo_dir: pathlib.Path) -> CheckResult:
     if not pyproject_path.is_file():
         context['error'] = 'pyproject.toml not found'
         return CheckResult(
-            name='python_requires_version', passed=False, description=description, context=context
+            name='python_requires_version',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='best-practice-requires-python',
         )
     try:
         with pyproject_path.open('rb') as f:
@@ -688,7 +715,11 @@ def python_requires_version(repo_dir: pathlib.Path) -> CheckResult:
     except Exception as e:
         context['error'] = f'failed to parse pyproject.toml: {e}'
         return CheckResult(
-            name='python_requires_version', passed=False, description=description, context=context
+            name='python_requires_version',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='best-practice-requires-python',
         )
     requires_python = None
     if 'project' in data and 'requires-python' in data['project']:
@@ -703,9 +734,14 @@ def python_requires_version(repo_dir: pathlib.Path) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='best-practice-requires-python',
         )
     return CheckResult(
-        name='python_requires_version', passed=False, description=description, context=context
+        name='python_requires_version',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='best-practice-requires-python',
     )
 
 
@@ -729,7 +765,11 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> CheckResult:
     if not repo_dir / 'pyproject.toml':
         context['error'] = 'pyproject.toml not found'
         return CheckResult(
-            name='repo_has_lock_file', passed=False, description=description, context=context
+            name='repo_has_lock_file',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='best-practice-commit-lock-file',
         )
     found_lock = [lf for lf in lock_files if (repo_dir / lf).is_file()]
     if found_lock:
@@ -739,9 +779,14 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='best-practice-commit-lock-file',
         )
     return CheckResult(
-        name='repo_has_lock_file', passed=False, description=description, context=context
+        name='repo_has_lock_file',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='best-practice-commit-lock-file',
     )
 
 
@@ -770,7 +815,11 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
     if not icon_path.is_file():
         context['error'] = 'icon.svg not found'
         return CheckResult(
-            name='charm_has_icon', passed=False, description=description, context=context
+            name='charm_has_icon',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charm-has-icon',
         )
     tree = ET.parse(icon_path)  # noqa: S314
     root = tree.getroot()
@@ -794,7 +843,11 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
             correct_size = math.isclose(vb_width, 100) and math.isclose(vb_height, 100)
     if not correct_size:
         return CheckResult(
-            name='charm_has_icon', passed=False, description=description, context=context
+            name='charm_has_icon',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charm-has-icon',
         )
     # Having a valid icon.svg file is not enough on its own: unless the charm
     # uses the `charm` plugin (which bundles icon.svg automatically), the icon
@@ -802,13 +855,18 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
     data = _get_charmcraft_yaml(repo_dir)
     if data is not None and not _icon_included_in_build(data):
         return CheckResult(
-            name='charm_has_icon', passed=False, description=description, context=context
+            name='charm_has_icon',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charm-has-icon',
         )
     return CheckResult(
         name='charm_has_icon',
         passed=True,
         description=description.replace('* [ ]', '* [x]'),
         context=context,
+        checklist_id='charm-has-icon',
     )
 
 

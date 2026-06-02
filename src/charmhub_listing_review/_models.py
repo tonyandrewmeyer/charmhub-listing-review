@@ -34,6 +34,13 @@ class CheckResult:
     context: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Extra check-specific data (e.g. {"url": "...", "status_code": 404})."""
 
+    checklist_id: str | None = None
+    """The ID of the checklist item this check corresponds to.
+
+    Matches `<!-- id: ... -->` markers in the rendered checklist. ``None``
+    means this check has no matching checklist entry (yet) and won't auto-tick.
+    """
+
 
 @dataclasses.dataclass
 class EvaluationResult:

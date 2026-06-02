@@ -29,10 +29,13 @@ console in a user-friendly format instead of updating a GitHub issue.
 """
 
 import argparse
+import re
 import sys
 
 from .evaluate import evaluate, get_default_branch
 from .update_issue import issue_comment
+
+_ID_MARKER_RE = re.compile(r'<!--\s*id:\s*(\S+)\s*-->')
 
 
 def format_checklist_for_console(checklist_markdown: str) -> str:
@@ -40,6 +43,9 @@ def format_checklist_for_console(checklist_markdown: str) -> str:
     lines = checklist_markdown.split('\n')
     formatted_lines = []
     for line in lines:
+        # ID markers are invisible in GitHub markdown but would otherwise show
+        # up as raw text on the terminal.
+        line = _ID_MARKER_RE.sub('', line).rstrip()
         if line.strip().startswith('* [x]'):
             item_text = line.replace('* [x]', '').strip()
             formatted_lines.append(f' ✅ {item_text}')
@@ -77,13 +83,15 @@ def print_self_review_results(
         '',  # documentation_link is not used.
     )
     # The initial items need to have the links removed.
+    # ID markers (<!-- id: ... -->) are kept so the same matcher used for the
+    # GitHub issue comment also works here.
     fixed_checks = """
     ### Basic Requirements
-* [ ] The charm does what it is meant to do, demonstrated in a demo or by following a tutorial.
-* [ ] The charm's page on Charmhub provides a quality impression. The overall appearance looks good and the documentation looks reasonable.
-* [ ] The charm has an icon.
-* [ ] Automated releasing to unstable channels exists
-* [ ] Integration tests exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`.
+* [ ] The charm does what it is meant to do, demonstrated in a demo or by following a tutorial. <!-- id: charm-demo -->
+* [ ] The charm's page on Charmhub provides a quality impression. The overall appearance looks good and the documentation looks reasonable. <!-- id: charmhub-quality-impression -->
+* [ ] The charm has an icon. <!-- id: charm-has-icon -->
+* [ ] Automated releasing to unstable channels exists <!-- id: ci-automated-releasing -->
+* [ ] Integration tests exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`. <!-- id: ci-integration-tests -->
 
     ### Documentation
     """.strip()  # noqa: E501
@@ -113,19 +121,19 @@ def print_self_review_results(
                 charm_dir=charm_dir,
             )
 
-            for result in evaluation.checks:
-                if not result.description:
-                    continue
-
-                unchecked_version = result.description.replace('* [x]', '* [ ]')
-                if unchecked_version not in comment:
-                    continue
-                if result.passed is True:
-                    comment = comment.replace(unchecked_version, result.description)
-                elif result.passed is False:
-                    failed_version = unchecked_version.replace('* [ ]', '* [o]')
-                    comment = comment.replace(unchecked_version, failed_version)
-                # passed is None: leave as '* [ ]' (unknown / not automated)
+            results_by_id = {r.checklist_id: r for r in evaluation.checks if r.checklist_id}
+            new_lines: list[str] = []
+            for line in comment.splitlines():
+                match = _ID_MARKER_RE.search(line)
+                if match:
+                    result = results_by_id.get(match.group(1))
+                    if result is not None and result.passed is True:
+                        line = line.replace('* [ ]', '* [x]', 1)
+                    elif result is not None and result.passed is False:
+                        line = line.replace('* [ ]', '* [o]', 1)
+                    # passed is None or no matching check: leave as '* [ ]'
+                new_lines.append(line)
+            comment = '\n'.join(new_lines)
         except Exception as e:
             print('\n⚠️  Warning: Could not run automated checks on repository.')
             print(

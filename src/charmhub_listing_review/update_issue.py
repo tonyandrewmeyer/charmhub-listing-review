@@ -85,11 +85,11 @@ When reviewing test coverage of the charm, note that:
 ```
 ## Listing requirements
 
-* [ ] The charm does what it is meant to do, per the [demo or tutorial]({demo_url}).
-* [ ] The [charm's page on Charmhub](https://charmhub.io/{name}) provides a quality impression. The overall appearance looks good and the [documentation]({documentation_link}) looks reasonable.
-* [ ] The charm has an icon.
-* [ ] [Automated releasing]({ci_release_url}) to unstable channels exists
-* [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`.
+* [ ] The charm does what it is meant to do, per the [demo or tutorial]({demo_url}). <!-- id: charm-demo -->
+* [ ] The [charm's page on Charmhub](https://charmhub.io/{name}) provides a quality impression. The overall appearance looks good and the [documentation]({documentation_link}) looks reasonable. <!-- id: charmhub-quality-impression -->
+* [ ] The charm has an icon. <!-- id: charm-has-icon -->
+* [ ] [Automated releasing]({ci_release_url}) to unstable channels exists <!-- id: ci-automated-releasing -->
+* [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`. <!-- id: ci-integration-tests -->
 """.strip()  # noqa: E501
     ]
     description.append('\n\n')
@@ -98,9 +98,9 @@ When reviewing test coverage of the charm, note that:
 ### Documentation
 
 A charm's documentation should focus on the charm itself. For workload-specific or Juju-related content, link to the appropriate upstream documentation. A smaller charm can have single-page documentation for its description. A bigger charm should include a full Diátaxis navigation tree. Check that the charm has documentation that covers:
-* [ ] How to use the charm, including configuration, limitations, and deviations in behaviour from the “non-charmed” version of the application.
-* [ ] How to modify the charm
-* [ ] A concise summary of the charm in the `charmcraft.yaml` 'summary' field, and a more detailed description in the `charmcraft.yaml` 'description' field.
+* [ ] How to use the charm, including configuration, limitations, and deviations in behaviour from the “non-charmed” version of the application. <!-- id: doc-how-to-use -->
+* [ ] How to modify the charm <!-- id: doc-how-to-modify -->
+* [ ] A concise summary of the charm in the `charmcraft.yaml` 'summary' field, and a more detailed description in the `charmcraft.yaml` 'description' field. <!-- id: charmcraft-summary-description -->
 """.strip(),  # noqa: E501
     )
 
@@ -335,8 +335,18 @@ review within the next three working days.
         subprocess.run(cmd, check=True)
 
 
+_ID_MARKER_RE = re.compile(r'<!--\s*id:\s*(\S+)\s*-->')
+
+
 def apply_automated_checks(issue_data: _IssueData, comment: str):
-    """Adjust the comment to tick items based on automated checks."""
+    """Tick checklist items based on automated check results.
+
+    Each checklist line carries a `<!-- id: <slug> -->` HTML comment that
+    identifies it. We match those IDs against ``CheckResult.checklist_id`` and
+    flip ``* [ ]`` to ``* [x]`` for any check that passed. Lines without a
+    matching automated check (or whose check did not pass) are left untouched
+    for the reviewer to handle manually.
+    """
     evaluation = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
@@ -347,13 +357,14 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['default_branch'],
         charm_dir=issue_data.get('charm_dir', '.'),
     )
-    for result in evaluation.checks:
-        # Convert Sphinx refs in the description to match the converted comment.
-        description = convert_sphinx_refs(result.description)
-        unchecked = description.replace('* [x]', '* [ ]')
-        if unchecked in comment:
-            comment = comment.replace(unchecked, description)
-    return comment
+    passed_ids = {r.checklist_id for r in evaluation.checks if r.checklist_id and r.passed is True}
+    new_lines: list[str] = []
+    for line in comment.splitlines():
+        match = _ID_MARKER_RE.search(line)
+        if match and match.group(1) in passed_ids:
+            line = line.replace('* [ ]', '* [x]', 1)
+        new_lines.append(line)
+    return '\n'.join(new_lines)
 
 
 def main():

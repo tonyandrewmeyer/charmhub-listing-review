@@ -178,6 +178,8 @@ config:
 def test_check_charm_name(charm_name, expected):
     result = evaluate.check_charm_name(charm_name)
     assert result.passed == expected
+    # Awaiting the canonical/charmcraft `:name:` PR before this maps to an ID.
+    assert result.checklist_id is None
 
 
 @mock.patch('charmhub_listing_review.evaluate._url_ok')
@@ -227,6 +229,7 @@ def test_security_doc(mock_url_ok, status, expected):
 def test_repository_name(url, charm_name, expected):
     result = evaluate.repository_name(url, charm_name)
     assert result.passed == expected
+    assert result.checklist_id == 'best-practice-repository-naming'
 
 
 def test_python_requires_version(tmp_path):
@@ -237,6 +240,7 @@ def test_python_requires_version(tmp_path):
     """)
     result = evaluate.python_requires_version(tmp_path)
     assert result.passed is True
+    assert result.checklist_id == 'best-practice-requires-python'
 
 
 def test_missing_python_requires_version(tmp_path):
@@ -247,6 +251,7 @@ def test_missing_python_requires_version(tmp_path):
     """)
     result = evaluate.python_requires_version(tmp_path)
     assert result.passed is False
+    assert result.checklist_id == 'best-practice-requires-python'
 
 
 @pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
@@ -255,12 +260,14 @@ def test_repo_has_lock_file(tmp_path, lock_file):
     (tmp_path / lock_file).write_text('lock')
     result = evaluate.repo_has_lock_file(tmp_path)
     assert result.passed is True
+    assert result.checklist_id == 'best-practice-commit-lock-file'
 
     tmp2 = tmp_path / 'no_repo'
     tmp2.mkdir()
     (tmp2 / 'pyproject.toml').write_text("[project]\nname = 'foo'\n")
     result = evaluate.repo_has_lock_file(tmp2)
     assert result.passed is False
+    assert result.checklist_id == 'best-practice-commit-lock-file'
 
 
 def test_charm_has_icon(tmp_path):
@@ -268,6 +275,7 @@ def test_charm_has_icon(tmp_path):
     icon.write_text('<svg width="100" height="100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
     assert result.passed is True
+    assert result.checklist_id == 'charm-has-icon'
 
     icon.write_text('<svg viewBox="0 0 100 100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
@@ -517,3 +525,5 @@ def test_relations_includes_optional(tmp_path, yaml_content, expected_checked):
     charmcraft_yaml.write_text(yaml_content)
     result = evaluate.relations_includes_optional(tmp_path)
     assert result.passed == expected_checked
+    # Awaiting the canonical/charmcraft `:name:` PR before this maps to an ID.
+    assert result.checklist_id is None
