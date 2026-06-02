@@ -61,7 +61,6 @@ repos:
       - id: ty
         name: ty
         description: Static type check
-<<<<<<< HEAD
         entry: uv run --group unit ty check .
         language: system
         types_or: [python, pyi, jupyter]
