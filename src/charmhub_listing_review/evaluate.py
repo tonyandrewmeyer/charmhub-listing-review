@@ -32,11 +32,34 @@ import shutil
 import subprocess  # noqa: S404
 import tempfile
 import tomllib
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET  # noqa: S405
 from typing import Any
 
-import requests
 import yaml
+
+
+def _url_ok(url: str, *, method: str = 'HEAD', timeout: int = 5) -> bool:
+    """Whether ``url`` resolves with a successful (non-error) status."""
+    try:
+        request = urllib.request.Request(url, method=method)  # noqa: S310
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            return response.status < 400
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def _fetch_url(url: str, *, timeout: int = 5) -> str | None:
+    """Fetch ``url`` as text, or return ``None`` on any error or non-2xx/3xx status."""
+    try:
+        request = urllib.request.Request(url, method='GET')  # noqa: S310
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            if response.status >= 400:
+                return None
+            return response.read().decode('utf-8', errors='replace')
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
 
 
 def evaluate(
@@ -122,13 +145,9 @@ def contribution_guidelines(contribution_url: str) -> str:
     description = '* [ ] The charm provides contribution guidelines.'
     # Ideally, this would also check that the content of the URL is actually a
     # reasonable contribution guide, but that is more difficult to automate.
-    try:
-        response = requests.head(contribution_url, allow_redirects=True, timeout=5)
-        if response.ok:
-            return description.replace('* [ ]', '* [x]')
-        return description
-    except requests.RequestException:
-        return description
+    if _url_ok(contribution_url):
+        return description.replace('* [ ]', '* [x]')
+    return description
 
 
 _known_licenses = {
@@ -147,17 +166,15 @@ def license_statement(license_url: str) -> str:
     clarified (which also implies an identified authorship of the charm).
     """
     description = '* [ ] The charm provides a license statement.'
-    try:
-        response = requests.get(license_url, allow_redirects=True, timeout=5)
-        if response.ok:
-            # Check for known licenses, with a simple hash.
-            license_hash = hashlib.sha512(response.text.strip().encode('utf-8')).hexdigest()
-            if license_hash in _known_licenses:
-                return description.replace('* [ ]', '* [x]')
-            # If it's another license, then let the reviewer decide if it's a license file.
+    text = _fetch_url(license_url)
+    if text is None:
         return description
-    except requests.RequestException:
-        return description
+    # Check for known licenses, with a simple hash.
+    license_hash = hashlib.sha512(text.strip().encode('utf-8')).hexdigest()
+    if license_hash in _known_licenses:
+        return description.replace('* [ ]', '* [x]')
+    # If it's another license, then let the reviewer decide if it's a license file.
+    return description
 
 
 def security_doc(security_url: str) -> str:
@@ -169,13 +186,9 @@ def security_doc(security_url: str) -> str:
     description = '* [ ] The charm provides a security statement.'
     # Ideally, this would also check some of the content of the security doc,
     # like that it has a section on how to report security issues.
-    try:
-        response = requests.head(security_url, allow_redirects=True, timeout=5)
-        if response.ok:
-            return description.replace('* [ ]', '* [x]')
-        return description
-    except requests.RequestException:
-        return description
+    if _url_ok(security_url):
+        return description.replace('* [ ]', '* [x]')
+    return description
 
 
 def get_default_branch(repository_url: str) -> str:
@@ -268,11 +281,7 @@ Finally, a paragraph that describes whom the charm is useful for.\n"""
             continue
         if not url:
             return description
-        try:
-            resp = requests.head(url, allow_redirects=True, timeout=5)
-            if not resp.ok:
-                return description
-        except requests.RequestException:
+        if not _url_ok(url):
             return description
 
     return description.replace('* [ ]', '* [x]')
