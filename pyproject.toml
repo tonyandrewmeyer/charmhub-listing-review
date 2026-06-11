@@ -41,6 +41,13 @@ update-issue = "charmhub_listing_review.update_issue:main"
 self-review = "charmhub_listing_review.self_review:main"
 
 # Testing tools configuration
+[tool.pytest.ini_options]
+# Promote warnings (deprecations, resource-cleanup leaks, and so on) to errors so
+# they surface in CI rather than going unnoticed.
+filterwarnings = [
+    "error",
+]
+
 [tool.coverage.run]
 branch = true
 
