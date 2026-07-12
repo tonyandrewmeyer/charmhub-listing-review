@@ -500,7 +500,7 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> str:
     for command in commands_to_run:
         try:
             subprocess.check_output(command, stderr=subprocess.DEVNULL)
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return description
 
     if all(command in found_commands for command in commands):

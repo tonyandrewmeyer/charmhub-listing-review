@@ -1,0 +1,34 @@
+name: test-charm
+title: Test Charm
+summary: A test charm for integration testing.
+description: |
+  This is a test charm used by the charmhub-listing-review
+  integration test suite. It exercises the automated checks.
+
+links:
+  documentation: https://canonical.com
+  issues: https://github.com/canonical/charmhub-listing-review/issues
+  source: https://github.com/canonical/charmhub-listing-review
+  website: https://canonical.com
+  contact: test@example.com
+
+requires:
+  database:
+    interface: mysql
+    optional: true
+
+provides:
+  grafana-dashboard:
+    interface: grafana-dashboard
+    optional: true
+
+actions:
+  do-something:
+    description: Does a thing.
+
+config:
+  options:
+    log-level:
+      type: string
+      default: info
+      description: Logging level.
