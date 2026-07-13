@@ -601,7 +601,12 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> str:
 def charm_has_icon(repo_dir: pathlib.Path) -> str:
     """The charm has an icon.
 
-    Requirements:
+    Having an icon is a recommendation, not a requirement, for public listing. See
+    the 2026-06-30 charm-tech decision on softening the logo requirement while
+    a stronger process is worked out with design/web/store. If the charm does
+    provide an icon, it must still meet the requirements below.
+
+    Requirements (when an icon is provided):
      * Canvas size must be 100x100 pixels.
      * The icon must consist of a circle with a flat color and a logo - any other detail is up to
        you, but it's a good idea to also conform to best practices.
@@ -617,7 +622,7 @@ def charm_has_icon(repo_dir: pathlib.Path) -> str:
      * Do not use glossy materials unless they are parts of a logo that you are not allowed to
        modify.
     """
-    description = '* [ ] The charm has an icon.'
+    description = '* [ ] The charm has an icon (recommended).'
     icon_path = repo_dir / 'icon.svg'
     if not icon_path.is_file():
         return description

@@ -81,7 +81,7 @@ def print_self_review_results(
     ### Basic Requirements
 * [ ] The charm does what it is meant to do, demonstrated in a demo or by following a tutorial.
 * [ ] The charm's page on Charmhub provides a quality impression. The overall appearance looks good and the documentation looks reasonable.
-* [ ] The charm has an icon.
+* [ ] The charm has an icon (recommended).
 * [ ] Automated releasing to unstable channels exists
 * [ ] Integration tests exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state.
 
@@ -123,7 +123,7 @@ def print_self_review_results(
                 if unchecked_version in comment:
                     if result.startswith('* [x]'):
                         comment = comment.replace(unchecked_version, result)
-                    else:
+                    elif '(recommended)' not in unchecked_version:
                         failed_version = unchecked_version.replace('* [ ]', '* [o]')
                         comment = comment.replace(unchecked_version, failed_version)
 

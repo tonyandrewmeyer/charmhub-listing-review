@@ -87,7 +87,7 @@ When reviewing test coverage of the charm, note that:
 
 * [ ] The charm does what it is meant to do, per the [demo or tutorial]({demo_url}).
 * [ ] The [charm's page on Charmhub](https://charmhub.io/{name}) provides a quality impression. The overall appearance looks good and the [documentation]({documentation_link}) looks reasonable.
-* [ ] The charm has an icon.
+* [ ] The charm has an icon (recommended).
 * [ ] [Automated releasing]({ci_release_url}) to unstable channels exists
 * [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state.
 """.strip()  # noqa: E501
