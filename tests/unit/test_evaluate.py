@@ -275,6 +275,14 @@ def test_repo_has_lock_file(tmp_path, lock_file):
     assert result.startswith('* [ ]')
 
 
+@pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
+def test_repo_has_lock_file_missing_pyproject(tmp_path, lock_file):
+    """A lock file with no pyproject.toml must not tick the item."""
+    (tmp_path / lock_file).write_text('lock')
+    result = evaluate.repo_has_lock_file(tmp_path)
+    assert result.startswith('* [ ]')
+
+
 def test_charm_has_icon(tmp_path):
     icon = tmp_path / 'icon.svg'
     icon.write_text('<svg width="100" height="100"></svg>')

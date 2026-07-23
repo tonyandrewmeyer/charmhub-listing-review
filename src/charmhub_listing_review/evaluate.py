@@ -591,7 +591,7 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> str:
     """,
     ).strip()
     lock_files = ['poetry.lock', 'uv.lock']
-    if not repo_dir / 'pyproject.toml':
+    if not (repo_dir / 'pyproject.toml').is_file():
         return description
     if any((repo_dir / lock_file).is_file() for lock_file in lock_files):
         return description.replace('* [ ]', '* [x]')
