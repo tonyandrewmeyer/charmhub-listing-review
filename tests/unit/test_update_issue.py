@@ -16,6 +16,7 @@
 
 import json
 import pathlib
+from typing import cast
 from unittest import mock
 
 import charmhub_listing_review.update_issue as update_issue
@@ -263,3 +264,42 @@ def test_issue_summary():
     name = 'my-charm'
     summary = update_issue.issue_summary(name)
     assert summary == 'Review `my-charm` for public listing on Charmhub'
+
+
+def test_issue_comment_includes_orphaned_check_bullets():
+    comment = update_issue.issue_comment(
+        'my-charm', 'https://demo.example.com', '', '', 'https://docs.example.com'
+    )
+    assert '* [ ] The charm provides contribution guidelines.' in comment
+    assert '* [ ] The charm provides a license statement.' in comment
+    assert '* [ ] The charm provides a security statement.' in comment
+
+
+@mock.patch('charmhub_listing_review.update_issue.evaluate')
+def test_apply_automated_checks_ticks_orphaned_checks(mock_evaluate):
+    mock_evaluate.return_value = [
+        '* [x] The charm provides contribution guidelines.',
+        '* [x] The charm provides a license statement.',
+        '* [x] The charm provides a security statement.',
+    ]
+    comment = (
+        '* [ ] The charm provides contribution guidelines.\n'
+        '* [ ] The charm provides a license statement.\n'
+        '* [ ] The charm provides a security statement.\n'
+    )
+    issue_data = {
+        'name': 'my-charm',
+        'project_repo': 'https://github.com/org/my-charm',
+        'ci_linting': '',
+        'contribution_link': 'https://github.com/org/my-charm/blob/main/CONTRIBUTING.md',
+        'license_link': 'https://github.com/org/my-charm/blob/main/LICENSE',
+        'security_link': 'https://github.com/org/my-charm/blob/main/SECURITY.md',
+        'default_branch': 'main',
+        'charm_dir': '.',
+    }
+    result = update_issue.apply_automated_checks(
+        cast('update_issue._IssueData', issue_data), comment
+    )
+    assert '* [x] The charm provides contribution guidelines.' in result
+    assert '* [x] The charm provides a license statement.' in result
+    assert '* [x] The charm provides a security statement.' in result

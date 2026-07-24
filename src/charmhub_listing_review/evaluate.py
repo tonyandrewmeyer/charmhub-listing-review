@@ -45,7 +45,8 @@ def _url_ok(url: str, *, method: str = 'HEAD', timeout: int = 5) -> bool:
     try:
         request = urllib.request.Request(url, method=method)  # noqa: S310
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            return response.status < 400
+            # file:// responses have no status; a successful urlopen means the file exists.
+            return response.status is None or response.status < 400
     except (urllib.error.URLError, OSError, ValueError):
         return False
 
@@ -55,7 +56,7 @@ def _fetch_url(url: str, *, timeout: int = 5) -> str | None:
     try:
         request = urllib.request.Request(url, method='GET')  # noqa: S310
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            if response.status >= 400:
+            if response.status is not None and response.status >= 400:
                 return None
             return response.read().decode('utf-8', errors='replace')
     except (urllib.error.URLError, OSError, ValueError):

@@ -101,6 +101,9 @@ A charm's documentation should focus on the charm itself. For workload-specific 
 * [ ] How to use the charm, including configuration, limitations, and deviations in behaviour from the “non-charmed” version of the application.
 * [ ] How to modify the charm
 * [ ] A concise summary of the charm in the `charmcraft.yaml` 'summary' field, and a more detailed description in the `charmcraft.yaml` 'description' field.
+* [ ] The charm provides contribution guidelines.
+* [ ] The charm provides a license statement.
+* [ ] The charm provides a security statement.
 """.strip(),  # noqa: E501
     )
 
