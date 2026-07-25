@@ -29,18 +29,35 @@ lint = [
     "codespell~=2.4",
     "ty",
     "typing_extensions~=4.2",
-    "zizmor~=1.11",
+    "zizmor~=1.26",
 ]
 unit = [
     "pytest~=9.0",
     "coverage[toml]~=7.0",
+]
+security = [
+    "pip-audit~=2.7",
 ]
 
 [project.scripts]
 update-issue = "charmhub_listing_review.update_issue:main"
 self-review = "charmhub_listing_review.self_review:main"
 
+# uv configuration
+[tool.uv]
+# Only resolve to packages published at least 7 days ago, to give a small
+# window for freshly-published bad releases (broken builds, supply-chain
+# incidents, yanked versions) to be noticed before we pick them up.
+exclude-newer = "7 days"
+
 # Testing tools configuration
+[tool.pytest.ini_options]
+# Promote warnings (deprecations, resource-cleanup leaks, and so on) to errors so
+# they surface in CI rather than going unnoticed.
+filterwarnings = [
+    "error",
+]
+
 [tool.coverage.run]
 branch = true
 

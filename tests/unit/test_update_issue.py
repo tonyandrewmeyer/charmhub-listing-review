@@ -16,6 +16,7 @@
 
 import json
 import pathlib
+from typing import cast
 from unittest import mock
 
 import charmhub_listing_review.update_issue as update_issue
@@ -397,3 +398,62 @@ def test_apply_automated_checks_multiline_comment():
     assert '* [ ] The charm has an icon. <!-- id: charm-has-icon -->' in output
     assert '* [x] Name the repository... <!-- id: best-practice-repository-naming -->' in output
     assert '* [ ] Some manual item, no id.' in output
+
+
+def test_issue_comment_includes_orphaned_check_bullets():
+    comment = update_issue.issue_comment(
+        'my-charm', 'https://demo.example.com', '', '', 'https://docs.example.com'
+    )
+    assert '* [ ] The charm provides contribution guidelines.' in comment
+    assert '* [ ] The charm provides a license statement.' in comment
+    assert '* [ ] The charm provides a security statement.' in comment
+
+
+@mock.patch('charmhub_listing_review.update_issue.evaluate')
+def test_apply_automated_checks_ticks_orphaned_checks(mock_evaluate):
+    """The three doc checks wired in #160 tick via their checklist_id, not text-matching."""
+    mock_evaluate.return_value = _make_evaluation([
+        CheckResult(
+            name='contribution_guidelines',
+            passed=True,
+            description='...',
+            context={},
+            checklist_id='doc-contribution-guidelines',
+        ),
+        CheckResult(
+            name='license_statement',
+            passed=True,
+            description='...',
+            context={},
+            checklist_id='doc-license-statement',
+        ),
+        CheckResult(
+            name='security_doc',
+            passed=True,
+            description='...',
+            context={},
+            checklist_id='doc-security-statement',
+        ),
+    ])
+    comment = (
+        '* [ ] The charm provides contribution guidelines.'
+        ' <!-- id: doc-contribution-guidelines -->\n'
+        '* [ ] The charm provides a license statement. <!-- id: doc-license-statement -->\n'
+        '* [ ] The charm provides a security statement. <!-- id: doc-security-statement -->\n'
+    )
+    issue_data = {
+        'name': 'my-charm',
+        'project_repo': 'https://github.com/org/my-charm',
+        'ci_linting': '',
+        'contribution_link': 'https://github.com/org/my-charm/blob/main/CONTRIBUTING.md',
+        'license_link': 'https://github.com/org/my-charm/blob/main/LICENSE',
+        'security_link': 'https://github.com/org/my-charm/blob/main/SECURITY.md',
+        'default_branch': 'main',
+        'charm_dir': '.',
+    }
+    result = update_issue.apply_automated_checks(
+        cast('update_issue._IssueData', issue_data), comment
+    )
+    assert '* [x] The charm provides contribution guidelines.' in result
+    assert '* [x] The charm provides a license statement.' in result
+    assert '* [x] The charm provides a security statement.' in result

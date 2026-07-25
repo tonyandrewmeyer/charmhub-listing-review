@@ -89,7 +89,7 @@ def print_self_review_results(
     ### Basic Requirements
 * [ ] The charm does what it is meant to do, demonstrated in a demo or by following a tutorial. <!-- id: charm-demo -->
 * [ ] The charm's page on Charmhub provides a quality impression. The overall appearance looks good and the documentation looks reasonable. <!-- id: charmhub-quality-impression -->
-* [ ] The charm has an icon. <!-- id: charm-has-icon -->
+* [ ] The charm has an icon (recommended). <!-- id: charm-has-icon -->
 * [ ] Automated releasing to unstable channels exists <!-- id: ci-automated-releasing -->
 * [ ] Integration tests exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`. <!-- id: ci-integration-tests -->
 
@@ -103,11 +103,18 @@ def print_self_review_results(
     comment = comment.replace('are also\nrequired for listing.', 'are also required for listing.')
 
     if project_repo:
-        # Like update-issue, this assumes it's GitHub for now.
         default_branch = branch or get_default_branch(project_repo)
-        contribution_url = f'{project_repo}/blob/{default_branch}/CONTRIBUTING.md'
-        license_url = f'{project_repo}/blob/{default_branch}/LICENSE'
-        security_url = f'{project_repo}/blob/{default_branch}/SECURITY.md'
+        if project_repo.startswith('file://'):
+            charm_subdir = '' if charm_dir in ('', '.') else f'/{charm_dir.strip("/")}'
+            base = f'{project_repo.rstrip("/")}{charm_subdir}'
+            contribution_url = f'{base}/CONTRIBUTING.md'
+            license_url = f'{base}/LICENSE'
+            security_url = f'{base}/SECURITY.md'
+        else:
+            # Like update-issue, this assumes it's GitHub for now.
+            contribution_url = f'{project_repo}/blob/{default_branch}/CONTRIBUTING.md'
+            license_url = f'{project_repo}/blob/{default_branch}/LICENSE'
+            security_url = f'{project_repo}/blob/{default_branch}/SECURITY.md'
 
         try:
             evaluation = evaluate(
@@ -129,9 +136,10 @@ def print_self_review_results(
                     result = results_by_id.get(match.group(1))
                     if result is not None and result.passed is True:
                         line = line.replace('* [ ]', '* [x]', 1)
-                    elif result is not None and result.passed is False:
+                    elif result is not None and result.passed is False and not result.optional:
                         line = line.replace('* [ ]', '* [o]', 1)
-                    # passed is None or no matching check: leave as '* [ ]'
+                    # passed is None, an optional check failed, or no matching
+                    # check: leave as '* [ ]' for manual review.
                 new_lines.append(line)
             comment = '\n'.join(new_lines)
         except Exception as e:

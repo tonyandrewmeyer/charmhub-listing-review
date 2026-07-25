@@ -1,4 +1,4 @@
-summary: Self-review CLI runs against a well-formed charm
+summary: Self-review CLI runs against a well-formed charm that uses tox for tooling
 systems:
   - ubuntu-24.04
 
@@ -7,7 +7,7 @@ execute: |
 
   # Create a passing test charm fixture.
   CHARM_DIR=$(mktemp -d)
-  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing-tox
 
   # Run self-review pointing at the local file:// repo.
   output=$(uv run --directory "$SPREAD_PATH" \
@@ -22,8 +22,15 @@ execute: |
 
   # File-based checks should pass.
   echo "$output" | MATCH "✅.*icon"
-  echo "$output" | MATCH "✅.*lock file" || echo "$output" | MATCH "✅.*committed to version control"
-  echo "$output" | MATCH "✅.*requires-python"
+
+  # Lock file and requires-python are "Best practices" items, fetched live
+  # from canonical/operator's best-practices.txt with no <!-- id: ... -->
+  # marker of their own, so the ID-based matcher can't tick them yet either
+  # way. That needs canonical/operator#2524 (stable :name: anchors on the
+  # admonitions) plus a follow-up here to parse those anchors out of the
+  # fetched text. Until then they always stay manual review (❓).
+  echo "$output" | MATCH "❓.*lock file" || echo "$output" | MATCH "❓.*committed to version control"
+  echo "$output" | MATCH "❓.*requires-python"
 
   # Progress summary should be present and show passes.
   echo "$output" | MATCH "Progress:.*passed"

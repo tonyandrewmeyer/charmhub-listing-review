@@ -21,14 +21,19 @@ execute: |
   echo "$output" | MATCH "0 passed"
   echo "$output" | MATCH "[0-9]+ failed"
 
-  # Icon should fail (no icon.svg).
-  echo "$output" | MATCH "❌.*icon"
+  # Icon is a soft requirement: a missing icon should not be a hard failure,
+  # it should stay as a manual-review item (❓).
+  echo "$output" | MATCH "❓.*icon"
 
-  # Lock file should fail.
-  echo "$output" | MATCH "❌.*lock file" || echo "$output" | MATCH "❌.*committed to version control"
-
-  # pyproject requires-python should fail.
-  echo "$output" | MATCH "❌.*requires-python"
+  # Lock file and requires-python are "Best practices" items, fetched live
+  # from canonical/operator's best-practices.txt and rendered with no
+  # <!-- id: ... --> marker of their own, so the ID-based matcher can't tick
+  # them either way yet. That needs canonical/operator#2524 (stable :name:
+  # anchors on the admonitions) plus a follow-up here to parse those anchors
+  # out of the fetched text. Until then they always stay manual review (❓),
+  # for a failing charm same as a passing one.
+  echo "$output" | MATCH "❓.*lock file" || echo "$output" | MATCH "❓.*committed to version control"
+  echo "$output" | MATCH "❓.*requires-python"
 
 restore: |
   rm -rf "${CHARM_DIR:-}" 2>/dev/null || true
