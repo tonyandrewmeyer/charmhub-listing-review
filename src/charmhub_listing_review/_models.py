@@ -15,7 +15,57 @@
 """Data models shared across modules."""
 
 import dataclasses
+import enum
 from typing import Any
+
+
+class Verdict(enum.Enum):
+    """The outcome of assessing a single checklist item.
+
+    ``CheckResult.passed`` uses ``bool | None`` and so cannot distinguish
+    "we could not tell" from "this item does not apply to this charm". Both
+    render as an unticked box, which asks the reviewer to go and look at
+    something that may have nothing to look at. Item assessments use this
+    four-valued vocabulary instead.
+    """
+
+    PASS = 'pass'  # noqa: S105 (a verdict, not a password)
+    """The charm meets the requirement."""
+
+    FAIL = 'fail'
+    """The charm does not meet the requirement."""
+
+    NOT_APPLICABLE = 'not-applicable'
+    """The requirement does not apply to this charm.
+
+    For example, an item about binary resource architectures when the charm
+    publishes no binary resources. This is a decision, not an absence of one:
+    the reviewer does not need to look.
+    """
+
+    NEEDS_HUMAN = 'needs-human'
+    """The evidence was gathered but is not conclusive."""
+
+
+@dataclasses.dataclass
+class ItemAssessment:
+    """The outcome of assessing one checklist item, with its reasoning."""
+
+    checklist_id: str
+    """The ``<!-- id: ... -->`` slug of the item this assesses."""
+
+    verdict: Verdict
+    """The assessment outcome."""
+
+    rationale: str
+    """One sentence explaining the verdict, shown to the reviewer."""
+
+    evidence: list[str] = dataclasses.field(default_factory=list)
+    """Human-readable evidence lines, e.g. ``'src/charm.py:466: ...'``.
+
+    These are what the reviewer checks the verdict against, and what an AI
+    backend is given when the deterministic pass returns ``NEEDS_HUMAN``.
+    """
 
 
 @dataclasses.dataclass
