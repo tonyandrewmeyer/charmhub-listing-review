@@ -191,7 +191,7 @@ def test_contribution_guidelines(mock_url_ok, status, expected):
 
 
 @mock.patch('charmhub_listing_review.evaluate._fetch_url')
-@pytest.mark.parametrize('license_hash', evaluate._known_licenses)
+@pytest.mark.parametrize('license_hash', sorted(evaluate._known_licenses))
 def test_license_statement_known_license(mock_fetch, license_hash):
     mock_fetch.return_value = 'Some License Version x.0, January 1979'
     with mock.patch('hashlib.sha512') as mock_hash:
@@ -223,7 +223,17 @@ def test_security_doc(mock_url_ok, status, expected):
     'url,charm_name,expected',
     [
         ('https://github.com/canonical/foo-operator', 'foo', True),
+        ('https://github.com/canonical/foo-operators', 'foo', True),
         ('https://github.com/canonical/bar', 'foo', False),
+        ('https://github.com/canonical/data-integrator', 'data-integrator', True),
+        ('https://github.com/canonical/data-integrator-operator', 'data-integrator', False),
+        ('https://github.com/canonical/data-integrator', 'foo', False),
+        (
+            'https://github.com/canonical/request-authentication-configurator',
+            'request-authentication-configurator',
+            True,
+        ),
+        ('https://github.com/canonical/foo', 'foo', False),
     ],
 )
 def test_repository_name(url, charm_name, expected):
@@ -270,12 +280,22 @@ def test_repo_has_lock_file(tmp_path, lock_file):
     assert result.checklist_id == 'best-practice-commit-lock-file'
 
 
+@pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
+def test_repo_has_lock_file_missing_pyproject(tmp_path, lock_file):
+    """A lock file with no pyproject.toml must not tick the item."""
+    (tmp_path / lock_file).write_text('lock')
+    result = evaluate.repo_has_lock_file(tmp_path)
+    assert result.passed is False
+    assert result.checklist_id == 'best-practice-commit-lock-file'
+
+
 def test_charm_has_icon(tmp_path):
     icon = tmp_path / 'icon.svg'
     icon.write_text('<svg width="100" height="100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
     assert result.passed is True
     assert result.checklist_id == 'charm-has-icon'
+    assert result.optional is True
 
     icon.write_text('<svg viewBox="0 0 100 100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
@@ -284,6 +304,14 @@ def test_charm_has_icon(tmp_path):
     icon.write_text('<svg width="99" height="99"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
     assert result.passed is False
+    assert result.optional is True
+
+
+def test_charm_has_icon_missing_is_optional(tmp_path):
+    """A missing icon is a recommendation, not a hard requirement."""
+    result = evaluate.charm_has_icon(tmp_path)
+    assert result.passed is False
+    assert result.optional is True
 
 
 @pytest.mark.parametrize(

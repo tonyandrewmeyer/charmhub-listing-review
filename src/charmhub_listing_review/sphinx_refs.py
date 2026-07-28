@@ -29,6 +29,7 @@ _JUJU_CLI = f'{_JUJU}reference/juju-cli/list-of-juju-cli-commands/'
 
 _OPS = 'https://documentation.ubuntu.com/ops/latest/'
 _OPS_CHARM_CODE = f'{_OPS}howto/write-and-structure-charm-code/'
+_OPS_INITIALISE_PROJECT = f'{_OPS}howto/initialise-your-project/'
 _OPS_MANAGE_CHARMS = f'{_OPS}howto/manage-charms/'
 _OPS_MANAGE_CONFIG = f'{_OPS}howto/manage-configuration/'
 _OPS_MANAGE_LIBS = f'{_OPS}howto/manage-libraries/'
@@ -81,9 +82,10 @@ _SPHINX_TO_MARKDOWN: dict[str, str] = {
     '[Use the Python provided by the base](#define-the-required-dependencies)':
         f'[Use the Python provided by the base]'
         f'({_OPS_CHARM_CODE}#define-the-required-dependencies)',
-    '[Create a repository and initialise it](#create-a-repository-and-initialise-it)':
-        f'[Create a repository and initialise it]'
-        f'({_OPS_CHARM_CODE}#create-a-repository-and-initialise-it)',
+    '[Create a repository](#create-a-repository)':
+        f'[Create a repository]({_OPS_INITIALISE_PROJECT}#create-a-repository)',
+    '[](#decide-your-charms-name)':
+        f'[Decide your charm\'s name]({_OPS_INITIALISE_PROJECT}#decide-your-charms-name)',
     '[Validate your charm with every change](#validate-your-charm-with-every-change)':
         f'[Validate your charm with every change]'
         f'({_OPS_CHARM_CODE}#validate-your-charm-with-every-change)',

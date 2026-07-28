@@ -47,7 +47,8 @@ def _url_ok(url: str, *, method: str = 'HEAD', timeout: int = 5) -> bool:
     try:
         request = urllib.request.Request(url, method=method)  # noqa: S310
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            return response.status < 400
+            # file:// responses have no status; a successful urlopen means the file exists.
+            return response.status is None or response.status < 400
     except (urllib.error.URLError, OSError, ValueError):
         return False
 
@@ -57,7 +58,7 @@ def _fetch_url(url: str, *, timeout: int = 5) -> str | None:
     try:
         request = urllib.request.Request(url, method='GET')  # noqa: S310
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            if response.status >= 400:
+            if response.status is not None and response.status >= 400:
                 return None
             return response.read().decode('utf-8', errors='replace')
     except (urllib.error.URLError, OSError, ValueError):
@@ -151,9 +152,14 @@ def contribution_guidelines(contribution_url: str) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='doc-contribution-guidelines',
         )
     return CheckResult(
-        name='contribution_guidelines', passed=False, description=description, context=context
+        name='contribution_guidelines',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='doc-contribution-guidelines',
     )
 
 
@@ -177,7 +183,11 @@ def license_statement(license_url: str) -> CheckResult:
     text = _fetch_url(license_url)
     if text is None:
         return CheckResult(
-            name='license_statement', passed=False, description=description, context=context
+            name='license_statement',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='doc-license-statement',
         )
     license_hash = hashlib.sha512(text.strip().encode('utf-8')).hexdigest()
     context['license_hash'] = license_hash
@@ -187,10 +197,15 @@ def license_statement(license_url: str) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='doc-license-statement',
         )
     context['known_license'] = False
     return CheckResult(
-        name='license_statement', passed=False, description=description, context=context
+        name='license_statement',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='doc-license-statement',
     )
 
 
@@ -210,9 +225,14 @@ def security_doc(security_url: str) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='doc-security-statement',
         )
     return CheckResult(
-        name='security_doc', passed=False, description=description, context=context
+        name='security_doc',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='doc-security-statement',
     )
 
 
@@ -477,19 +497,25 @@ def repository_name(repository_url: str, charm_name: str) -> CheckResult:
         r'\s+',
         ' ',
         """
-    * [ ] Name the repository using the pattern ``<charm name>-operator`` for a single charm,
-      or ``<base charm name>-operators`` when the repository will hold multiple related charms.
-      For the charm name, see {external+charmcraft:ref}`Charmcraft | Specify a name
-      <specify-a-name>`. See [Create a repository and initialise it]
-      (#create-a-repository-and-initialise-it).
+    * [ ] If your charm operates a workload, name the repository `<charm name>-operator`.
+      For advice about the charm name, see [](#decide-your-charms-name). If your charm doesn't
+      operate a workload (as in the case of integrator charms and configurator charms), the
+      `-operator` suffix isn't needed. For example, `foo-integrator` and `bar-configurator`.
+      Repositories that contain multiple charms or one or more charms and other artefacts
+      (like Rocks) will need to use other naming patterns.
+      See [Create a repository](#create-a-repository).
     """,
     ).strip()
     repo_name = repository_url.rstrip('/').split('/')[-1]
     if repo_name.endswith('.git'):
         repo_name = repo_name[:-4]
-    single_pattern = f'{charm_name}-operator'
-    multi_pattern = f'{charm_name}-operators'
-    passed = repo_name in (single_pattern, multi_pattern)
+    # Workload-less charms (integrator/configurator) don't need the ``-operator`` suffix,
+    # and the repository should be named the same as the charm — using the ``-operator``
+    # suffix is a hint that the name may not actually reflect a workload-less charm.
+    if charm_name.endswith(('-integrator', '-configurator')):
+        passed = repo_name == charm_name
+    else:
+        passed = repo_name in (f'{charm_name}-operator', f'{charm_name}-operators')
     return CheckResult(
         name='repository_name',
         passed=passed,
@@ -762,7 +788,7 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> CheckResult:
     ).strip()
     context: dict[str, Any] = {}
     lock_files = ['poetry.lock', 'uv.lock']
-    if not repo_dir / 'pyproject.toml':
+    if not (repo_dir / 'pyproject.toml').is_file():
         context['error'] = 'pyproject.toml not found'
         return CheckResult(
             name='repo_has_lock_file',
@@ -793,7 +819,12 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> CheckResult:
 def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
     """The charm has an icon.
 
-    Requirements:
+    Having an icon is a recommendation, not a requirement, for public listing. See
+    the 2026-06-30 charm-tech decision on softening the logo requirement while
+    a stronger process is worked out with design/web/store. If the charm does
+    provide an icon, it must still meet the requirements below.
+
+    Requirements (when an icon is provided):
      * Canvas size must be 100x100 pixels.
      * The icon must consist of a circle with a flat color and a logo - any other detail is up to
        you, but it's a good idea to also conform to best practices.
@@ -809,7 +840,7 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
      * Do not use glossy materials unless they are parts of a logo that you are not allowed to
        modify.
     """
-    description = '* [ ] The charm has an icon.'
+    description = '* [ ] The charm has an icon (recommended).'
     context: dict[str, Any] = {}
     icon_path = repo_dir / 'icon.svg'
     if not icon_path.is_file():
@@ -820,6 +851,7 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
             description=description,
             context=context,
             checklist_id='charm-has-icon',
+            optional=True,
         )
     tree = ET.parse(icon_path)  # noqa: S314
     root = tree.getroot()
@@ -848,6 +880,7 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
             description=description,
             context=context,
             checklist_id='charm-has-icon',
+            optional=True,
         )
     # Having a valid icon.svg file is not enough on its own: unless the charm
     # uses the `charm` plugin (which bundles icon.svg automatically), the icon
@@ -860,6 +893,7 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
             description=description,
             context=context,
             checklist_id='charm-has-icon',
+            optional=True,
         )
     return CheckResult(
         name='charm_has_icon',
@@ -867,6 +901,7 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
         description=description.replace('* [ ]', '* [x]'),
         context=context,
         checklist_id='charm-has-icon',
+        optional=True,
     )
 
 

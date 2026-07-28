@@ -91,6 +91,14 @@ class CheckResult:
     means this check has no matching checklist entry (yet) and won't auto-tick.
     """
 
+    optional: bool = False
+    """True if this check is a recommendation rather than a requirement.
+
+    A ``passed=False`` result for an optional check is not a hard failure: the
+    self-review console output leaves it as a manual-review item (``❓``)
+    instead of marking it failed (``❌``).
+    """
+
 
 @dataclasses.dataclass
 class EvaluationResult:
