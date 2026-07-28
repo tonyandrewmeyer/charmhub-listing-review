@@ -39,9 +39,13 @@ from __future__ import annotations
 import ast
 import dataclasses
 import pathlib
+import re
 from collections.abc import Callable
 from typing import Any
 
+import yaml
+
+from . import _workflows
 from ._models import ItemAssessment, Verdict
 
 # Vendored charm libraries live here. They are third-party code that the charm
@@ -87,6 +91,52 @@ def first_party_python_files(
 
 
 @dataclasses.dataclass
+class CharmSource:
+    """Where to find the charm, and what to call it.
+
+    The charm directory and the repository root are not always the same. A
+    monorepo puts the charm in a subdirectory but keeps one ``.github`` at the
+    top, so an item about CI reads the repository while an item about
+    ``charmcraft.yaml`` reads the charm directory. Passing one path and
+    guessing the other from it gets monorepos wrong in whichever direction the
+    guess was made.
+    """
+
+    charm_path: pathlib.Path
+    """The directory holding ``charmcraft.yaml``."""
+
+    repo_path: pathlib.Path | None = None
+    """The repository root. Defaults to the charm directory."""
+
+    charm_name: str = ''
+    """The charm's name, used to tell its own library apart from vendored ones."""
+
+    default_branch: str = 'main'
+    """The repository's default branch, for "runs on every change to" items."""
+
+    def __post_init__(self):
+        if self.repo_path is None:
+            self.repo_path = self.charm_path
+
+    @property
+    def repo(self) -> pathlib.Path:
+        """The repository root, never ``None``."""
+        assert self.repo_path is not None
+        return self.repo_path
+
+    def charmcraft_yaml(self) -> dict[str, Any]:
+        """Parse ``charmcraft.yaml``, returning ``{}`` if it is missing or bad."""
+        path = self.charm_path / 'charmcraft.yaml'
+        if not path.is_file():
+            return {}
+        try:
+            data = yaml.safe_load(path.read_text(encoding='utf-8', errors='replace'))
+        except yaml.YAMLError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+
+@dataclasses.dataclass
 class Evidence:
     """What ``gather`` found, in a form both a human and a model can read."""
 
@@ -104,15 +154,15 @@ class ItemCheck:
     checklist_id: str
     """The ``<!-- id: ... -->`` slug this check answers."""
 
-    gather: Callable[[pathlib.Path, str], Evidence]
-    """Collect the evidence this item names. Takes (charm_path, charm_name)."""
+    gather: Callable[[CharmSource], Evidence]
+    """Collect the evidence this item names, and nothing else."""
 
     decide: Callable[[Evidence], ItemAssessment]
     """Rule on gathered evidence, deferring what it cannot settle."""
 
-    def assess(self, charm_path: pathlib.Path, charm_name: str = '') -> ItemAssessment:
+    def assess(self, source: CharmSource) -> ItemAssessment:
         """Gather evidence for this item and rule on it."""
-        return self.decide(self.gather(charm_path, charm_name))
+        return self.decide(self.gather(source))
 
 
 # --- best-practice-safe-subprocess -------------------------------------------
@@ -317,11 +367,12 @@ def _check_program(site: _ExecSite, program: str) -> None:
         site.problems.append(f'runs {program!r} by a relative name rather than an absolute path')
 
 
-def gather_exec_sites(charm_path: pathlib.Path, charm_name: str = '') -> Evidence:
+def gather_exec_sites(source: CharmSource) -> Evidence:
     """Collect every place the charm starts an external process."""
+    charm_path = source.charm_path
     sites: list[_ExecSite] = []
     unparsed: list[str] = []
-    for path in first_party_python_files(charm_path, charm_name):
+    for path in first_party_python_files(charm_path, source.charm_name):
         relative = path.relative_to(charm_path).as_posix()
         try:
             tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
@@ -403,4 +454,682 @@ safe_subprocess = ItemCheck(
     decide=decide_safe_subprocess,
 )
 
-ITEM_CHECKS: dict[str, ItemCheck] = {check.checklist_id: check for check in (safe_subprocess,)}
+
+# --- ci-automated-releasing ---------------------------------------------------
+
+# Shell commands that publish a charm.
+_RELEASE_COMMANDS = (
+    re.compile(r'\bcharmcraft\s+upload\b'),
+    re.compile(r'\bcharmcraft\s+release\b'),
+    re.compile(r'\bcharmcraft\s+upload-resource\b'),
+)
+
+# Reusable workflows and actions that publish a charm on the caller's behalf.
+# Teams name these both ways round (`charm-release.yaml` in
+# canonical/observability, `release-charm.yaml` in charming-actions) and some
+# publish the charm as one of several artefacts (`publish-artifacts.yml` in
+# canonical/charm-ci), so matching only one spelling misses real releases.
+_RELEASE_ACTIONS = (
+    re.compile(r'charming-actions/(upload|release)-charm'),
+    re.compile(r'/(release|publish|upload)[_-]charm\.ya?ml'),
+    re.compile(r'/charm[_-](release|publish|upload)\.ya?ml'),
+    re.compile(r'/publish[_-]artifacts?\.ya?ml'),
+)
+
+# Channel risk levels that are not `stable`, per the checklist's "unstable
+# channels" wording.
+_UNSTABLE_CHANNELS = frozenset({'edge', 'beta', 'candidate'})
+
+
+@dataclasses.dataclass
+class _ReleaseWorkflow:
+    """A workflow that publishes the charm, and when it runs."""
+
+    path: str
+    triggers: str
+    default_branch_push: bool
+    how: str
+    """The step or ``uses:`` that does the publishing."""
+
+    channels: list[str] = dataclasses.field(default_factory=list)
+    """Literal channel names found. Empty when they are all expressions."""
+
+    caveats: list[str] = dataclasses.field(default_factory=list)
+
+
+def _literal_channels(workflow: _workflows.Workflow) -> list[str]:
+    """Channel names visible in the workflow, ignoring ``${{ }}`` expressions."""
+    text = yaml.safe_dump(workflow.jobs, default_flow_style=False)
+    found: list[str] = []
+    pattern = r'(?:channel:|--channel[= ]|--release[= ])\s*([A-Za-z0-9._/-]+)'
+    for match in re.finditer(pattern, text):
+        value = match.group(1)
+        if '${{' in value or not value:
+            continue
+        # A channel is `track/risk` or just `risk`.
+        found.append(value.split('/')[-1])
+    return sorted(set(found))
+
+
+def gather_release_workflows(source: CharmSource) -> Evidence:
+    """Find the workflows that publish the charm, and when they run."""
+    workflows = _workflows.load_workflows(source.repo)
+    summaries = _workflows.resolve_triggers(workflows, source.default_branch)
+
+    releases: list[_ReleaseWorkflow] = []
+    opaque: list[str] = []
+    unreadable = [w.path for w in workflows if w.unreadable]
+    for workflow in workflows:
+        how = ''
+        for location, command in _workflows.step_commands(workflow):
+            if _workflows.matches_any(command, _RELEASE_COMMANDS):
+                how = f'{location} runs `{command}`'
+                break
+        unrecognised: list[str] = []
+        if not how:
+            for job_id, uses in _workflows.iter_external_uses(workflow):
+                if _workflows.matches_any(uses, _RELEASE_ACTIONS):
+                    how = f'{workflow.path} ({job_id}) uses {uses.split("@")[0]}'
+                    break
+                unrecognised.append(f'{workflow.path} ({job_id}) calls {uses.split("@")[0]}')
+        if not how:
+            # A reusable workflow from another repository may publish the charm
+            # without saying so in its name. That is not evidence of absence.
+            opaque.extend(unrecognised)
+            continue
+        summary = summaries[workflow.path]
+        releases.append(
+            _ReleaseWorkflow(
+                path=workflow.path,
+                triggers=_workflows.describe_triggers(summary),
+                default_branch_push=summary.default_branch_push,
+                how=how,
+                channels=_literal_channels(workflow),
+                caveats=list(summary.caveats),
+            )
+        )
+
+    lines = [f'{release.path}: {release.how}; runs on {release.triggers}' for release in releases]
+    lines.extend(f'{path}: could not be parsed as YAML' for path in unreadable)
+    if not releases:
+        lines.extend(f'{entry}, whose contents are in another repository' for entry in opaque)
+    return Evidence(
+        lines=lines,
+        data={
+            'releases': releases,
+            'opaque': opaque,
+            'workflow_count': len(workflows),
+            'unreadable': unreadable,
+        },
+    )
+
+
+def decide_automated_releasing(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether releasing to an unstable channel is automated."""
+    checklist_id = 'ci-automated-releasing'
+    releases: list[_ReleaseWorkflow] = evidence.data.get('releases', [])
+    workflow_count: int = evidence.data.get('workflow_count', 0)
+
+    opaque: list[str] = evidence.data.get('opaque', [])
+
+    if not releases:
+        if opaque:
+            # Naming a reusable workflow is not reading it: this is undecidable
+            # from the repository, not a decided absence.
+            return ItemAssessment(
+                checklist_id=checklist_id,
+                verdict=Verdict.NEEDS_HUMAN,
+                rationale=(
+                    f'No workflow in this repository publishes the charm, but {len(opaque)} '
+                    f'job(s) call reusable workflows in other repositories that might.'
+                ),
+                evidence=evidence.lines,
+            )
+        rationale = (
+            'No workflow publishes the charm.'
+            if workflow_count
+            else 'The repository has no GitHub Actions workflows.'
+        )
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=rationale,
+            evidence=evidence.lines,
+        )
+
+    automatic = [release for release in releases if release.default_branch_push]
+    if not automatic:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'{len(releases)} workflow(s) publish the charm, but none runs on a push to '
+                f'the default branch, so releasing is triggered by hand or from elsewhere.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    known = {channel for release in automatic for channel in release.channels}
+    if known and not (known & _UNSTABLE_CHANNELS):
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'Releasing runs on the default branch, but the only channel(s) named are '
+                f'{", ".join(sorted(known))}, which are not unstable channels.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    caveats = [caveat for release in automatic for caveat in release.caveats]
+    if caveats:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'Releasing runs on the default branch, but not for every change: {caveats[0]}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=f'{automatic[0].path} publishes the charm on every push to the default branch.',
+        evidence=evidence.lines,
+    )
+
+
+automated_releasing = ItemCheck(
+    checklist_id='ci-automated-releasing',
+    gather=gather_release_workflows,
+    decide=decide_automated_releasing,
+)
+
+
+# --- ci-integration-tests -----------------------------------------------------
+
+# Shell commands that run an integration suite.
+_INTEGRATION_COMMANDS = (
+    re.compile(r'\bcharmcraft\s+test\b'),
+    # `\b-e` would never match: there is no word boundary between a space and
+    # a hyphen, so the boundary has to go on the other side.
+    re.compile(r'\btox\b.*\s-e\s+\S*integration'),
+    re.compile(r'\bpytest\b.*integration'),
+    re.compile(r'\bmake\s+integration\b'),
+    re.compile(r'\bspread\b'),
+)
+
+# The checklist excludes tracing endpoints from the coverage requirement.
+_EXCLUDED_INTERFACES = frozenset({'tracing'})
+
+# Marks the interpolated part of an f-string, so that `f'{APP}:database'` can
+# be told apart from a literal `'other-app:database'`.
+_PLACEHOLDER = '\x00'
+
+# The calls that wire two endpoints together. `integrate` is jubilant's and
+# modern python-libjuju's; `add_relation` is what pytest-operator suites use
+# (`ops_test.model.add_relation`), and is still the more common of the two in
+# charms with an established integration suite; `relate` is the older alias.
+_INTEGRATE_FUNCTIONS = frozenset({'integrate', 'add_relation', 'relate'})
+
+# Suffixes that distinguish a charm's package name from the application name
+# tests deploy it under: `grafana-k8s` is deployed as `grafana`.
+_CHARM_NAME_SUFFIXES = ('-k8s', '-operator', '-machine')
+
+
+def _declared_endpoints(charmcraft: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    """Return ``{endpoint: role}`` and the endpoints excluded as tracing."""
+    endpoints: dict[str, str] = {}
+    excluded: list[str] = []
+    for role in ('provides', 'requires'):
+        block = charmcraft.get(role)
+        if not isinstance(block, dict):
+            continue
+        for name, definition in block.items():
+            interface = ''
+            if isinstance(definition, dict):
+                interface = str(definition.get('interface') or '')
+            if interface in _EXCLUDED_INTERFACES:
+                excluded.append(f'{name} ({interface})')
+                continue
+            endpoints[str(name)] = role
+    return endpoints, excluded
+
+
+def _integration_test_files(charm_path: pathlib.Path) -> list[pathlib.Path]:
+    """Python files under a directory named ``integration``."""
+    return sorted(
+        path
+        for path in charm_path.rglob('*.py')
+        if 'integration' in path.relative_to(charm_path).parts
+    )
+
+
+def _literal_text(node: ast.AST) -> str | None:
+    """Render a string literal or f-string, marking interpolated parts."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            else:
+                parts.append(_PLACEHOLDER)
+        return ''.join(parts)
+    return None
+
+
+def _names_this_charm(application: str, charm_name: str) -> bool:
+    """Is ``application`` the charm under test, on the left of an endpoint?
+
+    Three spellings all mean the charm under test, and all three are common:
+
+    * interpolated - the suite holds its name in a variable (``APP_NAME``) and
+      hard-codes the applications it integrates with;
+    * the charm's own name;
+    * the charm's name without its packaging suffix - ``grafana-k8s`` is
+      deployed as ``grafana``, and its tests write ``'grafana:logging'``.
+
+    Requiring an exact match instead reports a charm with a thorough suite as
+    covering almost none of its endpoints. This is only ever consulted for an
+    endpoint the charm itself declares, which bounds how wrong the last case
+    can be.
+    """
+    if _PLACEHOLDER in application:
+        return True
+
+    def stem(name: str) -> str:
+        name = name.strip().lower()
+        for suffix in _CHARM_NAME_SUFFIXES:
+            name = name.removesuffix(suffix)
+        return name
+
+    return bool(charm_name) and stem(application) == stem(charm_name)
+
+
+class _IntegrateVisitor(ast.NodeVisitor):
+    """Collect the endpoints of this charm that ``integrate()`` calls name."""
+
+    def __init__(self, relative_path: str, charm_name: str, endpoints: set[str]):
+        self._path = relative_path
+        self._charm_name = charm_name
+        self._endpoints = endpoints
+        self.covered: dict[str, str] = {}
+        """endpoint -> ``path:lineno`` of the call that integrates it."""
+
+        self.unattributed: list[str] = []
+        """Calls whose endpoint could not be read."""
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, 'id', '')
+        if name in _INTEGRATE_FUNCTIONS:
+            location = f'{self._path}:{getattr(node, "lineno", 0)}'
+            for argument in node.args:
+                self._record(location, argument)
+        self.generic_visit(node)
+
+    def _record(self, location: str, argument: ast.expr) -> None:
+        text = _literal_text(argument)
+        if text is None:
+            self.unattributed.append(f'{location}: endpoint is not a literal')
+            return
+        if ':' not in text:
+            # `integrate('other-app')` names an application, not an endpoint.
+            return
+        application, endpoint = text.rsplit(':', 1)
+        if _PLACEHOLDER in endpoint:
+            self.unattributed.append(f'{location}: the endpoint name is interpolated')
+            return
+        if endpoint not in self._endpoints:
+            return
+        if not _names_this_charm(application, self._charm_name):
+            return
+        self.covered.setdefault(endpoint, location)
+
+
+def gather_integration_tests(source: CharmSource) -> Evidence:
+    """Collect the integration suite, its CI triggers, and endpoint coverage."""
+    charmcraft = source.charmcraft_yaml()
+    charm_name = source.charm_name or str(charmcraft.get('name') or '')
+    endpoints, excluded = _declared_endpoints(charmcraft)
+
+    workflows = _workflows.load_workflows(source.repo)
+    summaries = _workflows.resolve_triggers(workflows, source.default_branch)
+    running: list[dict[str, Any]] = []
+    opaque: list[str] = []
+    for workflow in workflows:
+        how = ''
+        for location, command in _workflows.step_commands(workflow):
+            if _workflows.matches_any(command, _INTEGRATION_COMMANDS):
+                how = f'{location} runs `{command}`'
+                break
+        if not how:
+            for job_id, uses in _workflows.iter_external_uses(workflow):
+                opaque.append(f'{workflow.path} ({job_id}) calls {uses.split("@")[0]}')
+            continue
+        summary = summaries[workflow.path]
+        running.append({
+            'path': workflow.path,
+            'how': how,
+            'triggers': _workflows.describe_triggers(summary),
+            'default_branch_push': summary.default_branch_push,
+            'caveats': list(summary.caveats),
+        })
+
+    test_files = _integration_test_files(source.charm_path)
+    covered: dict[str, str] = {}
+    unattributed: list[str] = []
+    for path in test_files:
+        relative = path.relative_to(source.charm_path).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+        except (SyntaxError, ValueError):
+            unattributed.append(f'{relative}: could not be parsed')
+            continue
+        visitor = _IntegrateVisitor(relative, charm_name, set(endpoints))
+        visitor.visit(tree)
+        for endpoint, location in visitor.covered.items():
+            covered.setdefault(endpoint, location)
+        # Both arguments of one call can be unreadable for the same reason.
+        unattributed.extend(line for line in visitor.unattributed if line not in unattributed)
+
+    uncovered = sorted(set(endpoints) - set(covered))
+
+    lines = [f'{entry["path"]}: {entry["how"]}; runs on {entry["triggers"]}' for entry in running]
+    lines.extend(
+        f'{path.relative_to(source.charm_path).as_posix()}: integration tests'
+        for path in test_files
+    )
+    lines.extend(
+        f'{endpoint} ({endpoints[endpoint]}): integrated at {location}'
+        for endpoint, location in sorted(covered.items())
+    )
+    lines.extend(f'{endpoint} ({endpoints[endpoint]}): never integrated' for endpoint in uncovered)
+    lines.extend(f'{name}: excluded, tracing' for name in excluded)
+    lines.extend(unattributed)
+    lines.extend(f'{entry}, whose contents are in another repository' for entry in opaque)
+
+    return Evidence(
+        lines=lines,
+        data={
+            'running': running,
+            'test_files': [str(path) for path in test_files],
+            'endpoints': endpoints,
+            'covered': covered,
+            'uncovered': uncovered,
+            'unattributed': unattributed,
+            'opaque': opaque,
+        },
+    )
+
+
+def decide_integration_tests(evidence: Evidence) -> ItemAssessment:
+    """Rule on the integration suite: does it exist, run, and cover the endpoints?
+
+    This item is a conjunction of three clauses, and they fail independently:
+    a charm can have a well-triggered workflow and integrate two of its seven
+    endpoints. Each clause is therefore settled on its own and every settled
+    failure is reported, rather than returning on the first one - and a clause
+    that cannot be settled must not mask one that can. The reviewer gets the
+    whole list, not the first thing that went wrong.
+    """
+    checklist_id = 'ci-integration-tests'
+    running: list[dict[str, Any]] = evidence.data.get('running', [])
+    test_files: list[str] = evidence.data.get('test_files', [])
+    uncovered: list[str] = evidence.data.get('uncovered', [])
+    endpoints: dict[str, str] = evidence.data.get('endpoints', {})
+    opaque: list[str] = evidence.data.get('opaque', [])
+
+    if not test_files:
+        # Without a suite there is nothing for the other two clauses to be
+        # about, so this one short-circuits where the others do not.
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale='The charm has no integration tests.',
+            evidence=evidence.lines,
+        )
+
+    failures: list[str] = []
+    deferred: list[str] = []
+
+    automatic = [entry for entry in running if entry['default_branch_push']]
+    if running and not automatic:
+        failures.append(
+            'they are not run on changes to the default branch '
+            f'({running[0]["path"]} runs on {running[0]["triggers"]})'
+        )
+    elif not running and opaque:
+        deferred.append(
+            f'no workflow in this repository runs them, but {len(opaque)} job(s) call '
+            f'reusable workflows in other repositories that might'
+        )
+    elif not running:
+        failures.append('no workflow runs them')
+
+    caveats = [caveat for entry in automatic for caveat in entry['caveats']]
+    if caveats:
+        failures.append(f'they do not run on every change - {caveats[0]}')
+
+    unattributed: list[str] = evidence.data.get('unattributed', [])
+    if uncovered and not unattributed:
+        failures.append(
+            f'{len(uncovered)} of {len(endpoints)} endpoint(s) are never integrated '
+            f'({", ".join(uncovered)})'
+        )
+    elif uncovered:
+        # An endpoint is only *never* integrated if every call that could have
+        # integrated it was readable. A suite that builds endpoint names at
+        # runtime may well cover them, and reporting a failure on the strength
+        # of what could not be read is how a review tool loses its reviewer.
+        deferred.append(
+            f'{len(uncovered)} of {len(endpoints)} endpoint(s) were not seen integrated '
+            f'({", ".join(uncovered)}), but {len(unattributed)} call(s) name their endpoint '
+            f'in a way the check cannot read'
+        )
+
+    if failures:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=f'The charm has integration tests, but {"; and ".join(failures)}.',
+            evidence=evidence.lines,
+        )
+
+    # Nothing settled failed. What is left needs either a network call (are the
+    # runs green?) or a reading of each test (does integrating an endpoint
+    # actually exercise it?).
+    deferred.append(
+        'whether the runs are passing, and whether each test exercises the endpoint it '
+        'integrates rather than only declaring it, is not visible in the source'
+    )
+    if not endpoints:
+        coverage = 'and it declares no endpoints to cover'
+    elif uncovered:
+        coverage = f'integrating {len(endpoints) - len(uncovered)} of {len(endpoints)} endpoint(s)'
+    else:
+        coverage = f'covering all {len(endpoints)} endpoint(s)'
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=f'The charm has integration tests {coverage}; {"; and ".join(deferred)}.',
+        evidence=evidence.lines,
+    )
+
+
+integration_tests = ItemCheck(
+    checklist_id='ci-integration-tests',
+    gather=gather_integration_tests,
+    decide=decide_integration_tests,
+)
+
+
+# --- best-practice-no-duplicate-model-config ----------------------------------
+
+# Model configuration keys, from
+# https://canonical.com/juju/docs/juju-cli/3.6/reference/configuration/list-of-model-configuration-keys
+# read 2026-07-28 against Juju 3.6. Juju adds keys occasionally; a key missing
+# from this list makes the check miss a duplicate, never invent one.
+MODEL_CONFIG_KEYS = frozenset({
+    'agent-metadata-url',
+    'agent-stream',
+    'agent-version',
+    'apt-ftp-proxy',
+    'apt-http-proxy',
+    'apt-https-proxy',
+    'apt-mirror',
+    'apt-no-proxy',
+    'automatically-retry-hooks',
+    'backup-dir',
+    'charmhub-url',
+    'cloudinit-userdata',
+    'container-image-metadata-defaults-disabled',
+    'container-image-metadata-url',
+    'container-image-stream',
+    'container-inherit-properties',
+    'container-networking-method',
+    'default-base',
+    'default-space',
+    'development',
+    'disable-network-management',
+    'disable-telemetry',
+    'egress-subnets',
+    'enable-os-refresh-update',
+    'enable-os-upgrade',
+    'fan-config',
+    'firewall-mode',
+    'ftp-proxy',
+    'http-proxy',
+    'https-proxy',
+    'ignore-machine-addresses',
+    'image-metadata-defaults-disabled',
+    'image-metadata-url',
+    'image-stream',
+    'juju-ftp-proxy',
+    'juju-http-proxy',
+    'juju-https-proxy',
+    'juju-no-proxy',
+    'logforward-enabled',
+    'logging-config',
+    'logging-output',
+    'lxd-snap-channel',
+    'max-action-results-age',
+    'max-action-results-size',
+    'max-status-history-age',
+    'max-status-history-size',
+    'net-bond-reconfigure-delay',
+    'no-proxy',
+    'num-container-provision-workers',
+    'num-provision-workers',
+    'provisioner-harvest-mode',
+    'proxy-ssh',
+    'resource-tags',
+    'secret-backend',
+    'snap-http-proxy',
+    'snap-https-proxy',
+    'snap-store-assertions',
+    'snap-store-proxy',
+    'snap-store-proxy-url',
+    'ssl-hostname-verification',
+    'storage-default-block-source',
+    'storage-default-filesystem-source',
+    'transmit-vendor-metrics',
+    'update-status-hook-interval',
+})
+
+
+def _normalise_option(name: str) -> str:
+    """Charm options may use either separator, so compare without one."""
+    return name.strip().lower().replace('_', '-')
+
+
+def gather_config_options(source: CharmSource) -> Evidence:
+    """Collect the charm's config options and any model-config key they match."""
+    charmcraft = source.charmcraft_yaml()
+    config = charmcraft.get('config')
+    options = config.get('options') if isinstance(config, dict) else None
+    if not isinstance(options, dict):
+        options = {}
+
+    duplicates: list[tuple[str, str]] = []
+    others: list[str] = []
+    for name, definition in options.items():
+        normalised = _normalise_option(str(name))
+        if normalised in MODEL_CONFIG_KEYS:
+            duplicates.append((str(name), normalised))
+            continue
+        description = ''
+        if isinstance(definition, dict):
+            description = ' '.join(str(definition.get('description') or '').split())
+        others.append(f'{name}: {description}' if description else str(name))
+
+    lines = [
+        f'{name}: duplicates the `{key}` model configuration key'
+        for name, key in sorted(duplicates)
+    ]
+    return Evidence(
+        lines=lines or others,
+        data={'duplicates': duplicates, 'others': others, 'option_count': len(options)},
+    )
+
+
+def decide_no_duplicate_model_config(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether the charm re-exposes model-level configuration."""
+    checklist_id = 'best-practice-no-duplicate-model-config'
+    duplicates: list[tuple[str, str]] = evidence.data.get('duplicates', [])
+    others: list[str] = evidence.data.get('others', [])
+
+    if not evidence.data.get('option_count'):
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm defines no configuration options.',
+        )
+
+    if duplicates:
+        names = ', '.join(name for name, _ in sorted(duplicates))
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(duplicates)} configuration option(s) duplicate a `juju model-config` '
+                f'key: {names}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    # Name matching settles the duplicate-by-name case exactly, and that is the
+    # common one. What it cannot settle is an option that controls the same
+    # thing under a different name, which needs the descriptions read - so the
+    # options and their descriptions are what this hands on.
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=(
+            f'None of the {len(others)} configuration option(s) share a name with a '
+            f'`juju model-config` key; whether any duplicates one under a different name '
+            f'needs their descriptions read.'
+        ),
+        evidence=evidence.lines,
+    )
+
+
+no_duplicate_model_config = ItemCheck(
+    checklist_id='best-practice-no-duplicate-model-config',
+    gather=gather_config_options,
+    decide=decide_no_duplicate_model_config,
+)
+
+
+ITEM_CHECKS: dict[str, ItemCheck] = {
+    check.checklist_id: check
+    for check in (
+        safe_subprocess,
+        automated_releasing,
+        integration_tests,
+        no_duplicate_model_config,
+    )
+}
