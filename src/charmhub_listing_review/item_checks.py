@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import json
 import pathlib
 import re
 from collections.abc import Callable
@@ -47,6 +48,7 @@ import yaml
 
 from . import _workflows
 from ._models import ItemAssessment, Verdict
+from .evaluate import effective_plugin
 
 # Vendored charm libraries live here. They are third-party code that the charm
 # author did not write and cannot change, so findings in them are not the
@@ -1124,6 +1126,276 @@ no_duplicate_model_config = ItemCheck(
 )
 
 
+# --- charmcraft-actions-additional-properties ----------------------------------
+
+# This item's evidence, unlike every other item in this module, is *not* one of
+# canonical/operator's best-practice admonitions - it is the `charmcraft.yaml`
+# file reference page, which lives in canonical/charmcraft's own documentation.
+# canonical/operator#2524 (the source of every other checklist_id here) only
+# adds `:name:` anchors to admonitions on operator's own howto pages, so this
+# bullet - like the `optional` key bullet `relations_includes_optional` already
+# covers - has no upstream anchor yet, from #2524 or anywhere else. The ID below
+# is this module's own placeholder, following the same `<key>-<slug>` shape the
+# charmcraft docs use for their internal ref targets (e.g.
+# `charmcraft-yaml-key-actions`), pending a charmcraft-side follow-up that adds
+# a real one.
+
+
+def gather_action_additional_properties(source: CharmSource) -> Evidence:
+    """Collect which of the charm's actions declare `additionalProperties`."""
+    charmcraft = source.charmcraft_yaml()
+    actions = charmcraft.get('actions')
+    if not isinstance(actions, dict):
+        actions = {}
+
+    missing: list[str] = []
+    present: list[str] = []
+    for name, definition in actions.items():
+        if isinstance(definition, dict) and 'additionalProperties' in definition:
+            present.append(str(name))
+        else:
+            missing.append(str(name))
+
+    lines = [f'{name}: missing `additionalProperties`' for name in sorted(missing)]
+    lines.extend(f'{name}: declares `additionalProperties`' for name in sorted(present))
+    return Evidence(
+        lines=lines,
+        data={'missing': missing, 'action_count': len(actions)},
+    )
+
+
+def decide_action_additional_properties(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether every action declares `additionalProperties`."""
+    checklist_id = 'charmcraft-actions-additional-properties'
+    action_count: int = evidence.data.get('action_count', 0)
+    missing: list[str] = evidence.data.get('missing', [])
+
+    if not action_count:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm declares no actions.',
+        )
+
+    if missing:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(missing)} of {action_count} action(s) do not declare '
+                f'`additionalProperties`: {", ".join(sorted(missing))}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=f'All {action_count} action(s) declare `additionalProperties`.',
+    )
+
+
+action_additional_properties = ItemCheck(
+    checklist_id='charmcraft-actions-additional-properties',
+    gather=gather_action_additional_properties,
+    decide=decide_action_additional_properties,
+)
+
+
+# --- best-practice-automated-dependency-updates --------------------------------
+
+# https://docs.renovatebot.com/configuration-options/#locations-for-configuration-filenames
+# read 2026-07-29. `package.json`'s `renovate` section is handled separately
+# below, since it needs the file parsed rather than merely existing.
+_DEPENDABOT_PATHS = ('.github/dependabot.yml', '.github/dependabot.yaml')
+
+_RENOVATE_PATHS = (
+    'renovate.json',
+    'renovate.jsonc',
+    'renovate.json5',
+    '.github/renovate.json',
+    '.github/renovate.jsonc',
+    '.github/renovate.json5',
+    '.gitlab/renovate.json',
+    '.gitlab/renovate.jsonc',
+    '.gitlab/renovate.json5',
+    '.renovaterc',
+    '.renovaterc.json',
+    '.renovaterc.jsonc',
+    '.renovaterc.json5',
+)
+
+
+def gather_dependency_update_tooling(source: CharmSource) -> Evidence:
+    """Look for a Dependabot or Renovate configuration at every valid location."""
+    repo = source.repo
+    found: list[str] = [
+        relative
+        for relative in (*_DEPENDABOT_PATHS, *_RENOVATE_PATHS)
+        if (repo / relative).is_file()
+    ]
+
+    package_json = repo / 'package.json'
+    if package_json.is_file():
+        try:
+            data = json.loads(package_json.read_text(encoding='utf-8', errors='replace'))
+        except json.JSONDecodeError:
+            data = {}
+        if isinstance(data, dict) and 'renovate' in data:
+            found.append('package.json (renovate section)')
+
+    lines = [f'{path}: present' for path in found]
+    return Evidence(lines=lines, data={'found': found})
+
+
+def decide_dependency_update_tooling(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether dependency-update tooling is configured."""
+    checklist_id = 'best-practice-automated-dependency-updates'
+    found: list[str] = evidence.data.get('found', [])
+
+    if found:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.PASS,
+            rationale=f'Dependency-update tooling is configured: {found[0]}.',
+            evidence=evidence.lines,
+        )
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.FAIL,
+        rationale=(
+            'No Dependabot or Renovate configuration was found at any location either tool '
+            'recognises.'
+        ),
+    )
+
+
+dependency_update_tooling = ItemCheck(
+    checklist_id='best-practice-automated-dependency-updates',
+    gather=gather_dependency_update_tooling,
+    decide=decide_dependency_update_tooling,
+)
+
+
+# --- best-practice-avoid-charm-plugin -------------------------------------------
+
+# The two plugins the best practice recommends migrating to. `charm` itself is
+# not listed here - it is the thing being avoided, and is checked for by name.
+_MIGRATED_PLUGINS = frozenset({'uv', 'poetry'})
+
+
+def gather_charm_plugin(source: CharmSource) -> Evidence:
+    """Collect the plugin each of charmcraft.yaml's parts resolves to.
+
+    Reuses ``evaluate.effective_plugin`` (originally written for
+    ``charm_has_icon``): charmcraft infers a part's plugin from its own name
+    when no `plugin` key is given, and defaults the whole build to the `charm`
+    plugin when `parts` is absent entirely - two different things, so they are
+    kept as two different evidence shapes rather than one collapsed to the
+    other.
+    """
+    charmcraft = source.charmcraft_yaml()
+    parts = charmcraft.get('parts')
+    if not isinstance(parts, dict) or not parts:
+        return Evidence(
+            lines=['No `parts` are declared, so Charmcraft defaults to the `charm` plugin.'],
+            data={'declared': False, 'charm': [], 'migrated': [], 'other': {}},
+        )
+
+    charm_parts: list[str] = []
+    migrated_parts: list[tuple[str, str]] = []
+    other_parts: dict[str, str] = {}
+    for name, part in parts.items():
+        if not isinstance(part, dict):
+            continue
+        plugin = effective_plugin(part, str(name))
+        if plugin == 'charm':
+            charm_parts.append(str(name))
+        elif plugin in _MIGRATED_PLUGINS:
+            migrated_parts.append((str(name), plugin))
+        else:
+            other_parts[str(name)] = plugin
+
+    lines = [f'{name}: uses the `charm` plugin' for name in sorted(charm_parts)]
+    lines.extend(f'{name}: uses the `{plugin}` plugin' for name, plugin in sorted(migrated_parts))
+    lines.extend(
+        f'{name}: uses the `{plugin}` plugin' for name, plugin in sorted(other_parts.items())
+    )
+    return Evidence(
+        lines=lines,
+        data={
+            'declared': True,
+            'charm': charm_parts,
+            'migrated': migrated_parts,
+            'other': other_parts,
+        },
+    )
+
+
+def decide_charm_plugin(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether the charm still uses Charmcraft's `charm` plugin."""
+    checklist_id = 'best-practice-avoid-charm-plugin'
+    declared: bool = evidence.data.get('declared', False)
+    charm_parts: list[str] = evidence.data.get('charm', [])
+    migrated_parts: list[tuple[str, str]] = evidence.data.get('migrated', [])
+    other_parts: dict[str, str] = evidence.data.get('other', {})
+
+    if not declared:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                'No `parts` are declared in charmcraft.yaml, so Charmcraft builds the charm '
+                'with its default `charm` plugin.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    # A part using `charm` is a settled failure regardless of what any other
+    # part resolves to - even a charm mid-migration, with one part already
+    # moved to `uv`/`poetry`, has not yet avoided the plugin everywhere.
+    if charm_parts:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(charm_parts)} part(s) use the `charm` plugin: '
+                f'{", ".join(sorted(charm_parts))}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    if migrated_parts:
+        names = ', '.join(f'{name} ({plugin})' for name, plugin in sorted(migrated_parts))
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.PASS,
+            rationale=f'The charm is built with a recommended plugin: {names}.',
+            evidence=evidence.lines,
+        )
+
+    if other_parts:
+        names = ', '.join(f'{name} ({plugin})' for name, plugin in sorted(other_parts.items()))
+        rationale = (
+            f'No part uses the `charm` plugin, but none names `uv` or `poetry` either: {names}.'
+        )
+    else:
+        rationale = '`parts` is declared, but no part could be read as a mapping.'
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=rationale,
+        evidence=evidence.lines,
+    )
+
+
+avoid_charm_plugin = ItemCheck(
+    checklist_id='best-practice-avoid-charm-plugin',
+    gather=gather_charm_plugin,
+    decide=decide_charm_plugin,
+)
+
+
 ITEM_CHECKS: dict[str, ItemCheck] = {
     check.checklist_id: check
     for check in (
@@ -1131,5 +1403,8 @@ ITEM_CHECKS: dict[str, ItemCheck] = {
         automated_releasing,
         integration_tests,
         no_duplicate_model_config,
+        action_additional_properties,
+        dependency_update_tooling,
+        avoid_charm_plugin,
     )
 }
