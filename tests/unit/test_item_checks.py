@@ -30,6 +30,7 @@ from charmhub_listing_review.item_checks import (
     first_party_python_files,
     integration_tests,
     no_duplicate_model_config,
+    pin_workload_versions,
     safe_subprocess,
 )
 
@@ -941,3 +942,257 @@ class TestAvoidCharmPlugin:
 
     def test_registered_under_its_checklist_id(self):
         assert ITEM_CHECKS['best-practice-avoid-charm-plugin'] is avoid_charm_plugin
+
+
+_K8S_CHARMCRAFT = """
+name: my-charm
+containers:
+  workload:
+    resource: my-image
+resources:
+  my-image:
+    type: oci-image
+    description: OCI image
+    upstream-source: {reference}
+"""
+
+
+def _k8s_source(tmp_path: pathlib.Path, reference: str | None) -> CharmSource:
+    charmcraft = _K8S_CHARMCRAFT.format(reference=reference or '')
+    if reference is None:
+        # No `upstream-source` key at all, not merely an empty value.
+        charmcraft = 'name: my-charm\ncontainers:\n  workload:\n    resource: my-image\n'
+        charmcraft += 'resources:\n  my-image:\n    type: oci-image\n    description: OCI image\n'
+    return _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+
+
+class TestPinWorkloadVersionsKubernetes:
+    def test_digest_pin_passes(self, tmp_path: pathlib.Path):
+        reference = 'docker.io/ubuntu/grafana@sha256:' + 'a' * 64
+        assessment = pin_workload_versions.assess(_k8s_source(tmp_path, reference))
+        assert assessment.verdict is Verdict.PASS
+        assert 'digest' in assessment.rationale
+
+    def test_specific_tag_passes(self, tmp_path: pathlib.Path):
+        assessment = pin_workload_versions.assess(
+            _k8s_source(tmp_path, 'ghcr.io/forgejo/forgejo:9.0.3-rootless')
+        )
+        assert assessment.verdict is Verdict.PASS
+        assert 'version tag' in assessment.rationale
+
+    def test_latest_tag_fails(self, tmp_path: pathlib.Path):
+        assessment = pin_workload_versions.assess(
+            _k8s_source(tmp_path, 'ghcr.io/forgejo/forgejo:latest')
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'my-image' in assessment.rationale
+
+    def test_no_tag_fails(self, tmp_path: pathlib.Path):
+        assessment = pin_workload_versions.assess(
+            _k8s_source(tmp_path, 'ghcr.io/forgejo/forgejo')
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_missing_upstream_source_needs_a_human(self, tmp_path: pathlib.Path):
+        assessment = pin_workload_versions.assess(_k8s_source(tmp_path, None))
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'my-image' in assessment.rationale
+
+    def test_registry_port_is_not_mistaken_for_a_tag(self, tmp_path: pathlib.Path):
+        """`host:5000/image` has a colon that is a port, not a floating tag."""
+        assessment = pin_workload_versions.assess(
+            _k8s_source(tmp_path, 'myregistry:5000/super-app@sha256:' + 'b' * 64)
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_one_floating_resource_fails_even_if_another_is_pinned(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\n'
+            'containers:\n  workload:\n    resource: pinned-image\n  sidecar:\n'
+            '    resource: floating-image\n'
+            'resources:\n'
+            '  pinned-image:\n    type: oci-image\n    description: pinned\n'
+            '    upstream-source: docker.io/foo/pinned@sha256:' + 'c' * 64 + '\n'
+            '  floating-image:\n    type: oci-image\n    description: floating\n'
+            '    upstream-source: docker.io/foo/floating:latest\n'
+        )
+        assessment = pin_workload_versions.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'floating-image' in assessment.rationale
+
+    def test_kubernetes_charm_with_no_oci_resource_is_not_applicable(self, tmp_path: pathlib.Path):
+        charmcraft = 'name: my-charm\ncontainers:\n  workload:\n    resource: my-image\n'
+        assessment = pin_workload_versions.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+
+class TestPinWorkloadVersionsMachine:
+    def test_no_install_logic_is_not_applicable(self, tmp_path: pathlib.Path):
+        assessment = pin_workload_versions.assess(
+            _source(tmp_path, **{'src/charm.py': 'import ops\n'})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_apt_lib_pinned_version_passes(self, tmp_path: pathlib.Path):
+        assessment = pin_workload_versions.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        "from charms.operator_libs_linux.v0 import apt\n"
+                        "apt.add_package('nginx', version='1.18.0-0ubuntu1')\n"
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_apt_lib_no_version_fails(self, tmp_path: pathlib.Path):
+        """Mirrors hardware-observer-operator's `apt.add_package(self.pkg, update_cache=True)`."""
+        assessment = pin_workload_versions.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        "from charms.operator_libs_linux.v0 import apt\n"
+                        "apt.add_package('freeipmi-tools', update_cache=True)\n"
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'no `version`' in assessment.rationale or 'do not pin' in assessment.rationale
+
+    def test_apt_lib_computed_version_needs_a_human(self, tmp_path: pathlib.Path):
+        """Mirrors hardware-observer-operator's ``add_pkg_with_candidate_version``.
+
+        ``apt.add_package(pkg, version=version)`` looks pinned at the call
+        site, but the real charm resolves ``version`` from ``apt-cache
+        policy``'s candidate - i.e. "whatever is newest" - which this check
+        cannot tell apart from a real pin without reading `get_candidate_version`.
+        """
+        assessment = pin_workload_versions.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/apt_helpers.py': (
+                        "from charms.operator_libs_linux.v0 import apt\n"
+                        'def add_pkg_with_candidate_version(pkg):\n'
+                        '    version = get_candidate_version(pkg)\n'
+                        "    apt.add_package(pkg, version=version, update_cache=False)\n"
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_snap_ensure_with_revision_passes(self, tmp_path: pathlib.Path):
+        """Mirrors postgresql-operator's ``snap_package.ensure(..., revision=..., channel=...)``."""
+        assessment = pin_workload_versions.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        'def install(snap_package, revision, channel):\n'
+                        '    snap_package.ensure(SnapState.Latest, revision=revision, channel=channel)\n'
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_snap_add_channel_only_fails(self, tmp_path: pathlib.Path):
+        """Mirrors hardware-observer-operator's ``snap.add(self.snap_name, channel=self.channel)``."""
+        assessment = pin_workload_versions.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        'from charms.operator_libs_linux.v2 import snap\n'
+                        'snap.add(self.snap_name, channel=self.channel)\n'
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'channel' in assessment.rationale or 'do not pin' in assessment.rationale
+
+    def test_unrelated_ensure_call_is_not_mistaken_for_a_snap_install(self, tmp_path: pathlib.Path):
+        """A bare ``.ensure()`` with no channel/revision keyword is too generic to match."""
+        assessment = pin_workload_versions.assess(
+            _source(tmp_path, **{'src/charm.py': 'thing.ensure()\n'})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    @pytest.mark.parametrize(
+        'source,expected',
+        [
+            ("subprocess.run(['apt-get', 'install', '-y', 'mysql-server'])", Verdict.FAIL),
+            ("subprocess.run(['apt-get', 'install', '-y', 'mysql-server=8.0.35'])", Verdict.PASS),
+            (
+                "subprocess.run(['snap', 'install', 'foo', '--channel=stable'])",
+                Verdict.FAIL,
+            ),
+            (
+                "subprocess.run(['snap', 'install', 'foo', '--revision=123'])",
+                Verdict.PASS,
+            ),
+            ("subprocess.run(['pip', 'install', 'requests'])", Verdict.FAIL),
+            ("subprocess.run(['pip', 'install', 'requests==2.31.0'])", Verdict.PASS),
+            (
+                "subprocess.run(['curl', '-LO', 'https://example.com/foo/latest/foo.tar.gz'])",
+                Verdict.FAIL,
+            ),
+        ],
+    )
+    def test_cli_install_commands(
+        self, tmp_path: pathlib.Path, source: str, expected: Verdict
+    ):
+        assessment = pin_workload_versions.assess(
+            _source(tmp_path, **{'src/charm.py': f'import subprocess\n{source}\n'})
+        )
+        assert assessment.verdict is expected
+
+    def test_cli_download_without_a_version_marker_needs_a_human(self, tmp_path: pathlib.Path):
+        assessment = pin_workload_versions.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        "import subprocess\n"
+                        "subprocess.run(['curl', '-LO', 'https://example.com/foo/foo.tar.gz'])\n"
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_program_name_literal_but_arguments_built_elsewhere_needs_a_human(
+        self, tmp_path: pathlib.Path
+    ):
+        assessment = pin_workload_versions.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        'import subprocess\n'
+                        'def install(args):\n'
+                        "    subprocess.run(['apt-get', *args])\n"
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_unparseable_source_needs_a_human(self, tmp_path: pathlib.Path):
+        assessment = pin_workload_versions.assess(
+            _source(tmp_path, **{'src/charm.py': 'def broken(:\n'})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['best-practice-pin-workload-versions'] is pin_workload_versions

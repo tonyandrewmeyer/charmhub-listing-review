@@ -1388,6 +1388,528 @@ avoid_charm_plugin = ItemCheck(
 )
 
 
+# --- best-practice-pin-workload-versions ---------------------------------
+
+# The checklist item and its linked "APT packages" howto section are both
+# written for a machine charm: install the workload with `apt`/`snap`/`pip`,
+# and pin the version rather than taking whatever is newest. That framing
+# does not survive contact with a Kubernetes charm, whose workload arrives as
+# an OCI image rather than an installed package - see
+# AI-ITEM-VALIDATION.md's "Item 16 is framed for machine charms" section.
+# This check decides which kind of charm it is looking at, then applies the
+# rule that actually applies:
+#
+# * A charm is Kubernetes when charmcraft.yaml declares a non-empty
+#   `containers` block - the key that makes Juju run it as an operator pod
+#   against a workload container, and, per Charmcraft's own reference, the
+#   reason an `oci-image` resource exists at all ("Kubernetes charms must
+#   declare an oci-image resource for each container they define"). This is
+#   the cause; an oci-image resource on its own is only ever a symptom of it,
+#   so `containers` is what this check keys on, not `resources`.
+# * Everything else is treated as a machine charm and judged by its install
+#   logic, the item as written.
+#
+# For the Kubernetes branch, `upstream-source` is not a documented
+# charmcraft.yaml key - Charmcraft's own resources reference stops at `type`,
+# `description` and `filename` - but it is a real, load-bearing convention:
+# release tooling in charms like grafana-k8s reads
+# `resources.<name>.upstream-source` with `yq` to know what to upload
+# (`charms.just`), and Renovate bumps the digest via a trailing `# renovate:`
+# comment. Where it is set, this check draws its pinned/floating line
+# explicitly, as a deliberate judgement call rather than one fallen into:
+# a `@sha256:` digest is pinned; a specific version tag (anything other than
+# `latest` or no tag at all) is treated as pinned too, since it is a
+# deliberate versioned choice rather than "whatever is newest" - the
+# opposite of what the item is guarding against - even though a tag is
+# mutable in a way a digest is not, which the rationale says outright rather
+# than papering over. Where `upstream-source` is absent, the check has no
+# in-repo evidence either way - the real pin happens wherever
+# `charmcraft upload-resource --image=...` is run, which for a charm like
+# forgejo-k8s is an opaque, external release pipeline - so the verdict is
+# NEEDS_HUMAN, not a guessed FAIL.
+
+
+@dataclasses.dataclass
+class _OciResource:
+    """One `oci-image` resource, and what charmcraft.yaml says about its pin."""
+
+    name: str
+    reference: str
+    pin: str
+    """`'digest'`, `'tag'`, `'floating'`, or `'unknown'` (no `upstream-source`)."""
+
+
+def _classify_reference(reference: str) -> str:
+    """Where an OCI image reference sits between pinned and floating."""
+    if '@sha256:' in reference or '@sha512:' in reference:
+        return 'digest'
+    # A registry host may itself contain a colon (a port, `host:5000/image`),
+    # so only look for a tag after the final slash.
+    name = reference.rsplit('/', 1)[-1]
+    if ':' not in name:
+        return 'floating'  # bare reference - implicitly `latest`
+    tag = name.split(':', 1)[1]
+    return 'floating' if not tag or tag == 'latest' else 'tag'
+
+
+def _oci_image_resources(resources: dict[str, Any]) -> list[_OciResource]:
+    found: list[_OciResource] = []
+    for name, definition in resources.items():
+        if not isinstance(definition, dict) or definition.get('type') != 'oci-image':
+            continue
+        reference = definition.get('upstream-source')
+        if isinstance(reference, str) and reference:
+            found.append(
+                _OciResource(
+                    name=str(name), reference=reference, pin=_classify_reference(reference)
+                )
+            )
+        else:
+            found.append(_OciResource(name=str(name), reference='', pin='unknown'))
+    return found
+
+
+# Package managers and downloaders whose CLI form this check recognises. The
+# Python-library forms (`apt.add_package`, `snap.add`, a `SnapCache` entry's
+# `.ensure()`) are matched separately in `_InstallVisitor`, since a charm can
+# use either shape - `AI-ITEM-VALIDATION.md`'s real charms use only the
+# library forms, but the checklist item's own wording ("snap install
+# --channel=stable", "apt install foo") is CLI-shaped.
+_CLI_INSTALL_PROGRAMS = frozenset({'apt', 'apt-get', 'snap', 'pip', 'pip3'})
+_CLI_DOWNLOAD_PROGRAMS = frozenset({'curl', 'wget'})
+
+# apt.add_package's sibling for a local .deb is not covered: it installs a
+# file already on disk, not "the latest available package", so the pinning
+# question does not apply to it the way it does to the two below.
+_APT_LIB_FUNCTIONS = frozenset({'add_package'})
+
+
+@dataclasses.dataclass
+class _InstallSite:
+    """One place the charm installs a workload package."""
+
+    location: str
+    pinned: bool | None
+    """True=pinned, False=floating, None=the check cannot tell statically."""
+
+    detail: str
+
+
+def _literal_tokens(node: ast.expr | None) -> list[str] | None:
+    """A command's argv as a list of strings, only if every element is literal."""
+    if isinstance(node, (ast.List, ast.Tuple)):
+        tokens: list[str] = []
+        for element in node.elts:
+            text = _literal_text(element)
+            if text is None or _PLACEHOLDER in text:
+                return None
+            tokens.append(text)
+        return tokens
+    if node is None:
+        return None
+    text = _literal_text(node)
+    return text.split() if text is not None and _PLACEHOLDER not in text else None
+
+
+def _first_program(node: ast.expr | None) -> str | None:
+    """The program name of a command, read from just the first argv element.
+
+    Resolved separately from the full argv so that a call whose *program* is
+    a literal but whose *arguments* are built elsewhere - a charm that always
+    runs `apt-get install` but assembles the package list at runtime - is
+    still recognised as an install site, rather than silently skipped the way
+    a call this check cannot identify at all is.
+    """
+    text: str | None
+    if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+        text = _literal_text(node.elts[0])
+    elif node is None:
+        text = None
+    else:
+        text = _literal_text(node)
+        text = text.split()[0] if text and ' ' in text else text
+    return pathlib.PurePosixPath(text).name if text else None
+
+
+class _InstallVisitor(ast.NodeVisitor):
+    """Collect the charm's package-install call sites and judge their pinning."""
+
+    def __init__(self, relative_path: str):
+        self._path = relative_path
+        self.sites: list[_InstallSite] = []
+
+    def _location(self, node: ast.AST) -> str:
+        return f'{self._path}:{getattr(node, "lineno", 0)}'
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if _is_name(func.value, 'apt') and func.attr in _APT_LIB_FUNCTIONS:
+                self._add_apt_lib_site(node)
+            elif _is_name(func.value, 'snap') and func.attr in ('add', 'ensure'):
+                self._add_snap_site(node, f'snap.{func.attr}')
+            elif func.attr == 'ensure' and {kw.arg for kw in node.keywords} & {
+                'channel',
+                'revision',
+            }:
+                # The receiver's name varies too much to match on (a `Snap` from
+                # `SnapCache()[name]`, a local, `self._snap`, ...), the same
+                # problem `container.exec()` has in the safe-subprocess check.
+                # Requiring a `channel`/`revision` keyword is the guard that
+                # keeps an unrelated `.ensure()` method from matching.
+                self._add_snap_site(node, '.ensure()')
+            elif (_is_name(func.value, 'subprocess') and func.attr in _SUBPROCESS_FUNCTIONS) or (
+                _is_name(func.value, 'os') and func.attr == 'system'
+            ):
+                self._add_cli_site(node, node.args[0] if node.args else None)
+        self.generic_visit(node)
+
+    def _add_apt_lib_site(self, node: ast.Call) -> None:
+        keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+        version = keywords.get('version')
+        if version is None:
+            self.sites.append(
+                _InstallSite(
+                    location=self._location(node),
+                    pinned=False,
+                    detail=(
+                        'apt.add_package with no `version`, so it installs whatever apt '
+                        'currently resolves as the candidate'
+                    ),
+                )
+            )
+            return
+        literal = _literal_text(version)
+        if literal is not None and _PLACEHOLDER not in literal:
+            self.sites.append(
+                _InstallSite(
+                    location=self._location(node),
+                    pinned=True,
+                    detail=f'apt.add_package pinned to version {literal!r}',
+                )
+            )
+            return
+        # `version=` is set, but computed rather than a literal - which covers
+        # both a real pin read from elsewhere and operator-libs-linux's own
+        # "install whatever apt-cache's candidate is" idiom
+        # (github.com/canonical/operator-libs-linux/issues/113). Both look
+        # identical at this call site, so this is genuinely undecidable
+        # statically, not a confident pin.
+        self.sites.append(
+            _InstallSite(
+                location=self._location(node),
+                pinned=None,
+                detail=(
+                    'apt.add_package passes a `version` computed elsewhere, which this check '
+                    'cannot resolve statically'
+                ),
+            )
+        )
+
+    def _add_snap_site(self, node: ast.Call, how: str) -> None:
+        keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+        if 'revision' in keywords:
+            # Unlike apt's `version`, a snap `revision` is an immutable
+            # per-build identifier by construction - there is no equivalent of
+            # apt-cache's "candidate" idiom in common use, so a computed
+            # revision is treated as pinned rather than deferred. A contrived
+            # "whatever revision this channel currently has" helper would defeat
+            # this; none of the real charms this check was validated against do.
+            literal = _literal_text(keywords['revision'])
+            detail = (
+                f'{how} pinned to revision {literal!r}'
+                if literal
+                else f'{how} pinned to a `revision`'
+            )
+            self.sites.append(
+                _InstallSite(location=self._location(node), pinned=True, detail=detail)
+            )
+            return
+        if 'channel' in keywords:
+            literal = _literal_text(keywords['channel'])
+            label = f' ({literal!r})' if literal else ''
+            self.sites.append(
+                _InstallSite(
+                    location=self._location(node),
+                    pinned=False,
+                    detail=(
+                        f'{how} installs by channel{label}, which tracks whatever is newest '
+                        f'in that channel'
+                    ),
+                )
+            )
+            return
+        self.sites.append(
+            _InstallSite(
+                location=self._location(node),
+                pinned=False,
+                detail=(
+                    f'{how} gives no channel or revision, so it installs the default '
+                    f'(newest) release'
+                ),
+            )
+        )
+
+    def _add_cli_site(self, node: ast.Call, argv: ast.expr | None) -> None:
+        program = _first_program(argv)
+        if program not in _CLI_INSTALL_PROGRAMS and program not in _CLI_DOWNLOAD_PROGRAMS:
+            return
+        tokens = _literal_tokens(argv)
+        if tokens is None:
+            self.sites.append(
+                _InstallSite(
+                    location=self._location(node),
+                    pinned=None,
+                    detail=(
+                        f'runs {program}, but its arguments are built elsewhere so the check '
+                        f'cannot read what it installs'
+                    ),
+                )
+            )
+            return
+        if program in ('apt', 'apt-get'):
+            self._judge_package_list(node, tokens, program, separator='=')
+        elif program in ('pip', 'pip3'):
+            self._judge_package_list(node, tokens, program, separator='==')
+        elif program == 'snap':
+            self._judge_snap_cli(node, tokens)
+        else:
+            self._judge_download(node, tokens, program)
+
+    def _judge_package_list(
+        self, node: ast.Call, tokens: list[str], program: str, *, separator: str
+    ) -> None:
+        if 'install' not in tokens:
+            return
+        packages = [t for t in tokens[tokens.index('install') + 1 :] if not t.startswith('-')]
+        if not packages:
+            return
+        unpinned = [p for p in packages if separator not in p]
+        if unpinned:
+            self.sites.append(
+                _InstallSite(
+                    location=self._location(node),
+                    pinned=False,
+                    detail=(
+                        f'{program} install {", ".join(unpinned)} with no `{separator}` '
+                        f'version pin'
+                    ),
+                )
+            )
+        else:
+            self.sites.append(
+                _InstallSite(
+                    location=self._location(node),
+                    pinned=True,
+                    detail=f'{program} install pinned via `{separator}`',
+                )
+            )
+
+    def _judge_snap_cli(self, node: ast.Call, tokens: list[str]) -> None:
+        if 'install' not in tokens:
+            return
+        if any(t.startswith('--revision') for t in tokens):
+            self.sites.append(
+                _InstallSite(
+                    location=self._location(node),
+                    pinned=True,
+                    detail='snap install pinned via --revision',
+                )
+            )
+            return
+        channel = next((t for t in tokens if t.startswith('--channel')), None)
+        detail = (
+            f'snap install by channel ({channel})'
+            if channel
+            else (
+                'snap install with no --channel or --revision, so it tracks the default '
+                '(stable) channel'
+            )
+        )
+        self.sites.append(_InstallSite(location=self._location(node), pinned=False, detail=detail))
+
+    def _judge_download(self, node: ast.Call, tokens: list[str], program: str) -> None:
+        urls = [t for t in tokens[1:] if not t.startswith('-')]
+        if not urls:
+            return
+        url = urls[0]
+        if 'latest' in pathlib.PurePosixPath(url).as_posix().lower():
+            self.sites.append(
+                _InstallSite(
+                    location=self._location(node),
+                    pinned=False,
+                    detail=f"{program} downloads {url!r}, which names 'latest'",
+                )
+            )
+            return
+        self.sites.append(
+            _InstallSite(
+                location=self._location(node),
+                pinned=None,
+                detail=(
+                    f'{program} downloads {url!r}; whether the URL is pinned to a version '
+                    f'needs a human to check'
+                ),
+            )
+        )
+
+
+def gather_pin_workload_versions(source: CharmSource) -> Evidence:
+    """Collect the evidence for whichever branch this charm's kind needs."""
+    charmcraft = source.charmcraft_yaml()
+    containers = charmcraft.get('containers')
+
+    if isinstance(containers, dict) and containers:
+        resources = charmcraft.get('resources')
+        oci_resources = _oci_image_resources(resources) if isinstance(resources, dict) else []
+        lines = [
+            f'{r.name}: {r.pin} ({r.reference})'
+            if r.reference
+            else f'{r.name}: no `upstream-source` given'
+            for r in oci_resources
+        ]
+        return Evidence(lines=lines, data={'kind': 'kubernetes', 'oci_resources': oci_resources})
+
+    sites: list[_InstallSite] = []
+    unparsed: list[str] = []
+    for path in first_party_python_files(source.charm_path, source.charm_name):
+        relative = path.relative_to(source.charm_path).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+        except (SyntaxError, ValueError):
+            unparsed.append(relative)
+            continue
+        visitor = _InstallVisitor(relative)
+        visitor.visit(tree)
+        sites.extend(visitor.sites)
+
+    lines = [f'{site.location}: {site.detail}' for site in sites]
+    lines.extend(f'{path}: could not be parsed' for path in unparsed)
+    return Evidence(lines=lines, data={'kind': 'machine', 'sites': sites, 'unparsed': unparsed})
+
+
+def decide_pin_workload_versions(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether the workload's version is pinned, machine or Kubernetes."""
+    checklist_id = 'best-practice-pin-workload-versions'
+    if evidence.data.get('kind') == 'kubernetes':
+        return _decide_oci_pinning(checklist_id, evidence)
+    return _decide_install_pinning(checklist_id, evidence)
+
+
+def _decide_oci_pinning(checklist_id: str, evidence: Evidence) -> ItemAssessment:
+    resources: list[_OciResource] = evidence.data.get('oci_resources', [])
+    if not resources:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm declares containers but no `oci-image` resource for them.',
+        )
+
+    floating = [r for r in resources if r.pin == 'floating']
+    if floating:
+        names = ', '.join(sorted(r.name for r in floating))
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(floating)} of {len(resources)} OCI resource(s) float to `latest` or an '
+                f'untagged reference: {names}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    unknown = [r for r in resources if r.pin == 'unknown']
+    if unknown:
+        names = ', '.join(sorted(r.name for r in unknown))
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'{len(unknown)} of {len(resources)} OCI resource(s) give no `upstream-source` in '
+                f'charmcraft.yaml: {names}. The reference actually published is set wherever '
+                f'`charmcraft upload-resource --image=...` runs, which is not always in this '
+                f"repository - check the resource's published revisions on Charmhub."
+            ),
+            evidence=evidence.lines,
+        )
+
+    digests = [r.name for r in resources if r.pin == 'digest']
+    tags = [r.name for r in resources if r.pin == 'tag']
+    detail = []
+    if digests:
+        detail.append(f'{len(digests)} pinned to a digest')
+    if tags:
+        detail.append(
+            f'{len(tags)} pinned to a version tag (not a digest, but not floating either)'
+        )
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=f'All {len(resources)} OCI resource(s) are pinned: {", ".join(detail)}.',
+        evidence=evidence.lines,
+    )
+
+
+def _decide_install_pinning(checklist_id: str, evidence: Evidence) -> ItemAssessment:
+    sites: list[_InstallSite] = evidence.data.get('sites', [])
+    unparsed: list[str] = evidence.data.get('unparsed', [])
+
+    if not sites:
+        if unparsed:
+            return ItemAssessment(
+                checklist_id=checklist_id,
+                verdict=Verdict.NEEDS_HUMAN,
+                rationale=(
+                    f'Found no package-install logic, but {len(unparsed)} file(s) could not be '
+                    f'parsed.'
+                ),
+                evidence=[f'{path}: could not be parsed' for path in unparsed],
+            )
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm installs no package or workload from its own source.',
+        )
+
+    unpinned = [site for site in sites if site.pinned is False]
+    if unpinned:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(unpinned)} of {len(sites)} install call(s) do not pin a version '
+                f'or revision.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    undecidable = [site for site in sites if site.pinned is None]
+    if undecidable:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'{len(undecidable)} of {len(sites)} install call(s) compute their version '
+                f'somewhere this check cannot see.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=f'All {len(sites)} install call(s) pin the version or revision they install.',
+        evidence=evidence.lines,
+    )
+
+
+pin_workload_versions = ItemCheck(
+    checklist_id='best-practice-pin-workload-versions',
+    gather=gather_pin_workload_versions,
+    decide=decide_pin_workload_versions,
+)
+
+
 ITEM_CHECKS: dict[str, ItemCheck] = {
     check.checklist_id: check
     for check in (
@@ -1397,5 +1919,6 @@ ITEM_CHECKS: dict[str, ItemCheck] = {
         no_duplicate_model_config,
         dependency_update_tooling,
         avoid_charm_plugin,
+        pin_workload_versions,
     )
 }
