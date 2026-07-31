@@ -56,7 +56,27 @@ from .evaluate import effective_plugin
 _LIB_CHARMS = ('lib', 'charms')
 
 # Directories whose contents are not the charm's runtime behaviour.
-_EXCLUDED_DIRS = frozenset({'tests', 'test', '.git', '.tox', 'venv', '.venv', 'build'})
+#
+# `.github` and `docs` were added after `charm-ubuntu` and `zookeeper-operator`
+# real-charm validation runs turned up print()/logging findings inside a PR-title
+# linter (`.github/check-conventional-pr-title.py`) and a Sphinx config helper
+# (`docs/.sphinx/get_vale_conf.py`) respectively - CI- and doc-build-time
+# tooling the charm author wrote, but never part of what Juju runs. `scripts/`
+# is deliberately *not* here: postgresql-operator deploys `scripts/*.py` onto
+# the target machine and runs it there (`src/rotate_logs.py` shells out to
+# `scripts/rotate_logs.py`), so it is charm runtime behaviour under a
+# different directory name, not tooling.
+_EXCLUDED_DIRS = frozenset({
+    'tests',
+    'test',
+    '.git',
+    '.tox',
+    'venv',
+    '.venv',
+    'build',
+    '.github',
+    'docs',
+})
 
 
 def first_party_python_files(
@@ -196,6 +216,17 @@ class _ExecSite:
     undecidable: str = ''
     """Why this site could not be ruled on, if it could not."""
 
+    captures: bool | None = None
+    """Whether a ``container.exec`` site captures output.
+
+    ``True`` for ``.wait_output()``, ``False`` for ``.wait()`` or a discarded
+    result, ``None`` when the result is bound to a name and the check cannot
+    see whether it is waited on elsewhere. Only meaningful for
+    ``kind == 'container.exec'`` - a ``subprocess`` site's capture status is
+    already in ``problems`` (see ``_add_subprocess``), and ``os.system`` has
+    no capturing form at all.
+    """
+
 
 class _ExecVisitor(ast.NodeVisitor):
     """Collect external-process call sites and what is wrong with them."""
@@ -209,6 +240,11 @@ class _ExecVisitor(ast.NodeVisitor):
         self._discarded: set[int] = set()
         # Local names that hold a literal command, innermost scope last.
         self._scopes: list[dict[str, ast.expr]] = []
+        # id(exec call node) -> 'wait_output' or 'wait', for
+        # `container.exec(...).wait_output()`-shaped chains. Populated when
+        # the outer .wait_output()/.wait() call is visited, which happens
+        # before the inner .exec() call is reached by generic_visit.
+        self._exec_capture: dict[int, str] = {}
 
     def visit_Module(self, node: ast.Module) -> None:
         self._visit_scope(node, node.body)
@@ -264,6 +300,8 @@ class _ExecVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
         if isinstance(func, ast.Attribute):
+            if func.attr in ('wait_output', 'wait') and _is_exec_call(func.value):
+                self._exec_capture[id(func.value)] = func.attr
             if _is_name(func.value, 'subprocess') and func.attr in _SUBPROCESS_FUNCTIONS:
                 self._add_subprocess(node, func.attr)
             elif _is_name(func.value, 'os') and func.attr == 'system':
@@ -316,11 +354,33 @@ class _ExecVisitor(ast.NodeVisitor):
             site.problems.append(
                 'discards the ExecProcess without waiting, so a failure is never noticed'
             )
+            site.captures = False
+        else:
+            wait_kind = self._exec_capture.get(id(node))
+            if wait_kind == 'wait_output':
+                site.captures = True
+            elif wait_kind == 'wait':
+                site.captures = False
+            # else: bound to a name and not chained here - whether it is
+            # waited on, and how, is not visible at this call site.
         self.sites.append(site)
 
 
 def _is_name(node: ast.AST, name: str) -> bool:
     return isinstance(node, ast.Name) and node.id == name
+
+
+def _is_exec_call(node: ast.AST) -> bool:
+    """Is ``node`` a ``<something>.exec(...)`` call?
+
+    Same "any receiver, method named exec" match `_add_container_exec` uses -
+    the receiver's name varies too much across charms to match on.
+    """
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == 'exec'
+    )
 
 
 def _check_argv(site: _ExecSite, argv: ast.AST | None) -> None:
@@ -1918,6 +1978,567 @@ pin_workload_versions = ItemCheck(
 )
 
 
+# --- charmcraft-summary-description -------------------------------------
+
+# `evaluate.py`'s `metadata_links` already gates presence and non-default
+# values for `summary` and `description` - that is not this item's to build.
+# What is left is the quality comparison between the two, which
+# `metadata_links` never makes: does `description` actually say more than
+# `summary`, or is it the same sentence reworded? See AI-ITEM-VALIDATION.md's
+# "Item 8" section and PLAN.md's design note for the real example this is
+# calibrated on (`forgejo-k8s`: summary "Charmed Kubernetes operator for
+# Forgejo.", description "Deploy and configure the software forge,
+# Forgejo." - barely longer, and not meaningfully more informative).
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+# Below this length ratio, `description` reads as "about the same length as
+# summary" rather than "a fuller description" - a real multi-sentence
+# description (evaluate.py's own default template runs to four paragraphs)
+# clears this by a wide margin. Combined with a minimum vocabulary overlap so
+# a short description that happens to share no words with summary (unrelated
+# content, not a paraphrase) is not swept in by length alone.
+_PARAPHRASE_MAX_LENGTH_RATIO = 2.0
+_PARAPHRASE_MIN_OVERLAP = 0.2
+
+
+def _normalise_words(text: str) -> list[str]:
+    return _WORD_RE.findall(text.lower())
+
+
+def gather_summary_description(source: CharmSource) -> Evidence:
+    """Collect the summary and description strings, nothing else."""
+    charmcraft = source.charmcraft_yaml()
+    summary = str(charmcraft.get('summary') or '')
+    description = str(charmcraft.get('description') or '')
+    lines = []
+    if summary:
+        lines.append(f'summary: {summary}')
+    if description:
+        lines.append(f'description: {description}')
+    return Evidence(lines=lines, data={'summary': summary, 'description': description})
+
+
+def decide_summary_description(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether description is a paraphrase of summary.
+
+    One confident branch only: description is not meaningfully longer than
+    summary and shares a good share of its vocabulary - a paraphrase, not a
+    fuller description. Everything else, including a charm that would
+    obviously pass, is left to a human - judging whether a longer
+    description is actually *good* (covers configuration, limitations,
+    deviations from the unpackaged application) is prose judgement this
+    check should not assert a PASS on.
+    """
+    checklist_id = 'charmcraft-summary-description'
+    summary: str = evidence.data.get('summary', '')
+    description: str = evidence.data.get('description', '')
+
+    if not summary or not description:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                'summary and/or description is missing (or metadata_links already flags it as '
+                'missing/default) - there is nothing to compare.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    summary_words = _normalise_words(summary)
+    description_words = _normalise_words(description)
+    if not summary_words:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale='summary has no comparable content to check description against.',
+            evidence=evidence.lines,
+        )
+
+    length_ratio = len(description_words) / len(summary_words)
+    overlap = len(set(summary_words) & set(description_words)) / len(set(summary_words))
+
+    if length_ratio < _PARAPHRASE_MAX_LENGTH_RATIO and overlap >= _PARAPHRASE_MIN_OVERLAP:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                'description is not meaningfully longer than summary and shares a good share '
+                'of its vocabulary - it reads as a paraphrase rather than a fuller description.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=(
+            'description is not a simple paraphrase of summary by length and overlap; whether '
+            'it is actually a good, detailed description needs a human to judge.'
+        ),
+        evidence=evidence.lines,
+    )
+
+
+summary_description = ItemCheck(
+    checklist_id='charmcraft-summary-description',
+    gather=gather_summary_description,
+    decide=decide_summary_description,
+)
+
+
+# --- best-practice-use-logging-not-print ---------------------------------
+
+# Upstream text: "avoid `print()` calls, and ensure that any subprocess calls
+# capture output." Two independent, differently-shaped clauses:
+#
+# * print() is a clean, standalone, purely mechanical AST pass - any
+#   first-party call to the bare `print` builtin.
+# * "subprocess calls capture output" is *not* reimplemented here. It is read
+#   off `gather_exec_sites`' existing evidence: `decide_safe_subprocess`'s
+#   'does not capture output, so it leaks into the Juju log' problem string
+#   for `subprocess.run`, and the `captures` field that same evidence now
+#   carries for `container.exec` sites (added above specifically for this
+#   item - see the `_ExecSite.captures` docstring - since a charm that runs
+#   everything through Pebble has zero `subprocess` calls and the earlier
+#   check only knew about `subprocess`, see AI-ITEM-VALIDATION.md's "Item 10
+#   is looking in the wrong place" note).
+
+
+class _PrintVisitor(ast.NodeVisitor):
+    """Collect first-party calls to the bare ``print`` builtin."""
+
+    def __init__(self, relative_path: str):
+        self._path = relative_path
+        self.locations: list[str] = []
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id == 'print':
+            self.locations.append(f'{self._path}:{getattr(node, "lineno", 0)}')
+        self.generic_visit(node)
+
+
+def gather_logging_not_print(source: CharmSource) -> Evidence:
+    """Collect print() call sites, and read capture status off exec-site evidence."""
+    prints: list[str] = []
+    unparsed: list[str] = []
+    for path in first_party_python_files(source.charm_path, source.charm_name):
+        relative = path.relative_to(source.charm_path).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+        except (SyntaxError, ValueError):
+            unparsed.append(relative)
+            continue
+        visitor = _PrintVisitor(relative)
+        visitor.visit(tree)
+        prints.extend(visitor.locations)
+
+    exec_evidence = gather_exec_sites(source)
+    sites: list[_ExecSite] = exec_evidence.data.get('sites', [])
+    unparsed = sorted(set(unparsed) | set(exec_evidence.data.get('unparsed', [])))
+
+    uncaptured: list[str] = []
+    undecidable_capture: list[str] = []
+    for site in sites:
+        if site.kind == 'subprocess' and any(
+            'does not capture output' in problem for problem in site.problems
+        ):
+            uncaptured.append(f'{site.location}: subprocess call does not capture output')
+        elif site.kind == 'container.exec':
+            if site.captures is False:
+                uncaptured.append(f'{site.location}: container.exec call does not capture output')
+            elif site.captures is None:
+                undecidable_capture.append(
+                    f'{site.location}: could not tell whether this call captures output'
+                )
+
+    lines = [f'{location}: print()' for location in prints]
+    lines.extend(uncaptured)
+    lines.extend(undecidable_capture)
+    lines.extend(f'{path}: could not be parsed' for path in unparsed)
+    return Evidence(
+        lines=lines,
+        data={
+            'prints': prints,
+            'uncaptured': uncaptured,
+            'undecidable_capture': undecidable_capture,
+            'unparsed': unparsed,
+            'exec_site_count': len(sites),
+        },
+    )
+
+
+def decide_logging_not_print(evidence: Evidence) -> ItemAssessment:
+    """Rule on print() usage and external-process output capture.
+
+    Two independent clauses, settled separately per the module's rule: a
+    clause that cannot be settled must not mask one that can, and must not
+    produce a failure either.
+    """
+    checklist_id = 'best-practice-use-logging-not-print'
+    prints: list[str] = evidence.data.get('prints', [])
+    uncaptured: list[str] = evidence.data.get('uncaptured', [])
+    undecidable_capture: list[str] = evidence.data.get('undecidable_capture', [])
+    unparsed: list[str] = evidence.data.get('unparsed', [])
+    exec_site_count: int = evidence.data.get('exec_site_count', 0)
+
+    failures: list[str] = []
+    if prints:
+        failures.append(f'{len(prints)} call(s) to print() were found')
+    if uncaptured:
+        failures.append(f'{len(uncaptured)} external-process call(s) do not capture their output')
+    if failures:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=f'{"; and ".join(failures)}.'.capitalize(),
+            evidence=evidence.lines,
+        )
+
+    deferred: list[str] = []
+    if undecidable_capture:
+        deferred.append(
+            f'{len(undecidable_capture)} external-process call(s) whose capture status could '
+            f'not be read statically'
+        )
+    if unparsed:
+        deferred.append(f'{len(unparsed)} file(s) could not be parsed')
+    if deferred:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'No print() calls and no external-process call known to leak output, but '
+                f'{"; and ".join(deferred)}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    if not exec_site_count:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.PASS,
+            rationale='No print() calls were found, and the charm runs no external commands.',
+        )
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=(
+            f'No print() calls were found, and none of the {exec_site_count} external-process '
+            f'call(s) are known to leak their output.'
+        ),
+        evidence=evidence.lines,
+    )
+
+
+logging_not_print = ItemCheck(
+    checklist_id='best-practice-use-logging-not-print',
+    gather=gather_logging_not_print,
+    decide=decide_logging_not_print,
+)
+
+
+# --- best-practice-no-sensitive-data-in-logs ------------------------------
+
+# AI-ITEM-VALIDATION.md's "Item 12 found a real violation" section is the
+# design brief: `forgejo-k8s`'s src/charm.py logged a whole database relation
+# databag at logger.debug immediately before reading the password out of it.
+# Three shapes are what credentials actually leak through and are greppable:
+# a whole relation databag, the charm's own `self.config` mapping, or
+# `os.environ`. This is deliberately not a general secret-scanner - logging
+# one specific field pulled out of any of those three (`data["endpoint"]`,
+# `self.config["some-key"]`) is not caught, and should not be guessed at.
+
+# `logger` is charm code's near-universal convention
+# (`logger = logging.getLogger(__name__)`, per operator's own template);
+# `logging.<level>` covers a direct call to the root logger. Both are "a
+# logging-module-shaped call" per the checklist item's own wording. A
+# receiver under any other name is a known, narrow gap, not a guess.
+_LOG_LEVELS = frozenset({'debug', 'info', 'warning', 'error', 'exception', 'critical'})
+
+
+@dataclasses.dataclass
+class _LogFinding:
+    """One logging call that logs a whole sensitive mapping."""
+
+    location: str
+    what: str
+
+
+class _LoggingVisitor(ast.NodeVisitor):
+    """Collect first-party logging calls whose argument is a sensitive shape.
+
+    Resolution follows the same "assigned exactly once to a local" idea
+    `_ExecVisitor` uses for command literals - charms routinely fetch data a
+    line or two before logging it, same as they build a command before
+    running it. The receiver shapes differ enough from command literals that
+    a shared helper is not obviously worth it, so this is its own small
+    scope-tracking pass rather than a reuse of `_ExecVisitor`'s.
+    """
+
+    def __init__(self, relative_path: str):
+        self._path = relative_path
+        self.findings: list[_LogFinding] = []
+        self.call_count = 0
+        self._scopes: list[dict[str, ast.expr]] = []
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._visit_scope(node, node.body)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_scope(node, node.body)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_scope(node, node.body)
+
+    def _visit_scope(self, node: ast.AST, body: list[ast.stmt]) -> None:
+        self._push_scope(body)
+        self.generic_visit(node)
+        self._scopes.pop()
+
+    def _push_scope(self, body: list[ast.stmt]) -> None:
+        assigned: dict[str, list[ast.expr]] = {}
+        for statement in ast.walk(ast.Module(body=body, type_ignores=[])):
+            if not isinstance(statement, ast.Assign):
+                continue
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    assigned.setdefault(target.id, []).append(statement.value)
+        self._scopes.append({
+            name: values[0] for name, values in assigned.items() if len(values) == 1
+        })
+
+    def _resolve(self, node: ast.expr) -> ast.expr:
+        if not isinstance(node, ast.Name):
+            return node
+        for scope in reversed(self._scopes):
+            if node.id in scope:
+                return scope[node.id]
+        return node
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        is_logging_call = (
+            isinstance(func, ast.Attribute)
+            and func.attr in _LOG_LEVELS
+            and (_is_name(func.value, 'logger') or _is_name(func.value, 'logging'))
+        )
+        if is_logging_call:
+            self.call_count += 1
+            location = f'{self._path}:{getattr(node, "lineno", 0)}'
+            seen: set[str] = set()
+            for argument in node.args:
+                what = _classify_sensitive(self._resolve(argument))
+                if what and what not in seen:
+                    seen.add(what)
+                    self.findings.append(_LogFinding(location=location, what=what))
+        self.generic_visit(node)
+
+
+def _classify_sensitive(node: ast.expr) -> str | None:
+    """Which of the three known-sensitive shapes ``node`` is, if any.
+
+    Only the whole-mapping shape is recognised - a subscript that pulls one
+    field out (``data["password"]``, ``self.config["key"]``) does not match
+    any branch here and is deliberately left alone.
+    """
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == 'fetch_relation_data':
+            return 'the return value of fetch_relation_data()'
+        return None
+    if isinstance(node, ast.Subscript):
+        value = node.value
+        if isinstance(value, ast.Attribute) and value.attr == 'data':
+            return 'a relation databag (`.data[...]`)'
+        return None
+    if isinstance(node, ast.Attribute):
+        if node.attr == 'config' and _is_name(node.value, 'self'):
+            return 'self.config'
+        if node.attr == 'environ' and _is_name(node.value, 'os'):
+            return 'os.environ'
+    return None
+
+
+def gather_sensitive_logging(source: CharmSource) -> Evidence:
+    """Collect first-party logging calls that log a whole sensitive mapping."""
+    findings: list[_LogFinding] = []
+    unparsed: list[str] = []
+    call_count = 0
+    for path in first_party_python_files(source.charm_path, source.charm_name):
+        relative = path.relative_to(source.charm_path).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+        except (SyntaxError, ValueError):
+            unparsed.append(relative)
+            continue
+        visitor = _LoggingVisitor(relative)
+        visitor.visit(tree)
+        findings.extend(visitor.findings)
+        call_count += visitor.call_count
+
+    lines = [f'{finding.location}: logs {finding.what}' for finding in findings]
+    lines.extend(f'{path}: could not be parsed' for path in unparsed)
+    return Evidence(
+        lines=lines,
+        data={'findings': findings, 'unparsed': unparsed, 'call_count': call_count},
+    )
+
+
+def decide_sensitive_logging(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether a logging call writes a whole sensitive mapping to the log."""
+    checklist_id = 'best-practice-no-sensitive-data-in-logs'
+    findings: list[_LogFinding] = evidence.data.get('findings', [])
+    unparsed: list[str] = evidence.data.get('unparsed', [])
+    call_count: int = evidence.data.get('call_count', 0)
+
+    if findings:
+        locations = ', '.join(sorted({finding.location for finding in findings}))
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(findings)} logging call(s) log a whole relation databag, `self.config`, '
+                f'or `os.environ` rather than a specific field: {locations}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    if unparsed:
+        # A file that could not be read might contain the very call this
+        # item is looking for - "we saw no logging calls" is not a claim
+        # this check can make while some of the source went unread.
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'No logging call was found to log a whole relation databag, `self.config`, or '
+                f'`os.environ`, but {len(unparsed)} file(s) could not be parsed.'
+            ),
+            evidence=[f'{path}: could not be parsed' for path in unparsed],
+        )
+
+    if not call_count:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm has no logging calls to check.',
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=(
+            f"None of the charm's {call_count} logging call(s) log a whole relation databag, "
+            f'`self.config`, or `os.environ`.'
+        ),
+    )
+
+
+sensitive_logging = ItemCheck(
+    checklist_id='best-practice-no-sensitive-data-in-logs',
+    gather=gather_sensitive_logging,
+    decide=decide_sensitive_logging,
+)
+
+
+# --- charmcraft-yaml-key-resources -----------------------------------------
+
+# Deliberately thin - see PLAN.md's "Item 23" design note. The only evidence
+# that lives in the repository is whether the item applies at all: a
+# `type: file` resource declared in `charmcraft.yaml`. Whether that resource
+# actually has a revision published for every architecture the charm claims
+# to support is a fact that lives entirely on Charmhub - `gather` here only
+# ever reads `CharmSource`, so answering that needs `ItemCheck` to grow the
+# ability to make a network call, which is a real design change (shared with
+# item #2, the Charmhub-page item) to be made explicitly, once, not implied
+# by this item's implementation. Until then: NOT_APPLICABLE for no `file`
+# resource (a real, free result) and NEEDS_HUMAN otherwise, naming the
+# declared resources and the charm's claimed architectures.
+
+
+def _platform_architectures(charmcraft: dict[str, Any]) -> list[str]:
+    """Architectures the charm claims to support, from `platforms:`.
+
+    A platform key is either a bare architecture (``amd64``) or
+    ``<base>@<version>:<arch>``; only the part after the last ``:`` is the
+    architecture.
+    """
+    platforms = charmcraft.get('platforms')
+    if not isinstance(platforms, dict):
+        return []
+    return sorted({str(key).rsplit(':', 1)[-1] for key in platforms})
+
+
+def gather_resource_architectures(source: CharmSource) -> Evidence:
+    """Collect declared `type: file` resources and the charm's claimed archs."""
+    charmcraft = source.charmcraft_yaml()
+    resources = charmcraft.get('resources')
+    resources = resources if isinstance(resources, dict) else {}
+
+    file_resources = sorted(
+        str(name)
+        for name, definition in resources.items()
+        if isinstance(definition, dict) and definition.get('type') == 'file'
+    )
+    architectures = _platform_architectures(charmcraft)
+
+    lines = [f'{name}: `type: file` resource' for name in file_resources]
+    lines.extend(f'claims to support: {arch}' for arch in architectures)
+    return Evidence(
+        lines=lines,
+        data={'file_resources': file_resources, 'architectures': architectures},
+    )
+
+
+def decide_resource_architectures(evidence: Evidence) -> ItemAssessment:
+    """Rule on binary-resource architecture coverage - as far as it can be judged.
+
+    Whether each declared `file` resource has a published revision for every
+    claimed architecture is a Charmhub-only fact this check has no way to
+    read; see the module comment above. What is free: whether the item
+    applies at all.
+    """
+    checklist_id = 'charmcraft-yaml-key-resources'
+    file_resources: list[str] = evidence.data.get('file_resources', [])
+    architectures: list[str] = evidence.data.get('architectures', [])
+
+    if not file_resources:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm declares no `type: file` resource.',
+        )
+
+    names = ', '.join(file_resources)
+    if architectures:
+        archs = ', '.join(architectures)
+        rationale = (
+            f'The charm declares {len(file_resources)} `type: file` resource(s) ({names}) and '
+            f'claims to support {archs}; whether each has a published revision for every one '
+            f'of those architectures can only be checked on Charmhub.'
+        )
+    else:
+        rationale = (
+            f'The charm declares {len(file_resources)} `type: file` resource(s) ({names}) but '
+            f'names no `platforms`, so the architectures to check on Charmhub are not stated '
+            f'here.'
+        )
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=rationale,
+        evidence=evidence.lines,
+    )
+
+
+resource_architectures = ItemCheck(
+    checklist_id='charmcraft-yaml-key-resources',
+    gather=gather_resource_architectures,
+    decide=decide_resource_architectures,
+)
+
+
 ITEM_CHECKS: dict[str, ItemCheck] = {
     check.checklist_id: check
     for check in (
@@ -1929,5 +2550,9 @@ ITEM_CHECKS: dict[str, ItemCheck] = {
         dependency_update_tooling,
         avoid_charm_plugin,
         pin_workload_versions,
+        summary_description,
+        logging_not_print,
+        sensitive_logging,
+        resource_architectures,
     )
 }
