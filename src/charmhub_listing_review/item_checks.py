@@ -67,7 +67,27 @@ from .evaluate import effective_plugin
 _LIB_CHARMS = ('lib', 'charms')
 
 # Directories whose contents are not the charm's runtime behaviour.
-_EXCLUDED_DIRS = frozenset({'tests', 'test', '.git', '.tox', 'venv', '.venv', 'build'})
+#
+# `.github` and `docs` were added after `charm-ubuntu` and `zookeeper-operator`
+# real-charm validation runs turned up print()/logging findings inside a PR-title
+# linter (`.github/check-conventional-pr-title.py`) and a Sphinx config helper
+# (`docs/.sphinx/get_vale_conf.py`) respectively - CI- and doc-build-time
+# tooling the charm author wrote, but never part of what Juju runs. `scripts/`
+# is deliberately *not* here: postgresql-operator deploys `scripts/*.py` onto
+# the target machine and runs it there (`src/rotate_logs.py` shells out to
+# `scripts/rotate_logs.py`), so it is charm runtime behaviour under a
+# different directory name, not tooling.
+_EXCLUDED_DIRS = frozenset({
+    'tests',
+    'test',
+    '.git',
+    '.tox',
+    'venv',
+    '.venv',
+    'build',
+    '.github',
+    'docs',
+})
 
 
 def first_party_python_files(
@@ -374,6 +394,23 @@ def _check_argv(site: _ExecSite, argv: ast.AST | None) -> None:
                     f'runs a command string through {program}, so the shell interprets it'
                 )
                 break
+
+
+# Callables that start an external process. Item 17's own check no longer
+# reads these - that is ruff's - but item 16 still has to notice a workload
+# being installed by shelling out.
+_SUBPROCESS_FUNCTIONS = frozenset({'run', 'call', 'check_call', 'check_output', 'Popen'})
+
+
+def _is_name(node: ast.AST, name: str) -> bool:
+    """Is ``node`` a bare reference to ``name``?
+
+    Only the dotted spelling is recognised, deliberately: this is a cheap
+    match for `apt.add_package(...)`-shaped calls, not import resolution. A
+    charm aliasing its imports defeats it, which is why the checks that have
+    to be right about that are ruff's.
+    """
+    return isinstance(node, ast.Name) and node.id == name
 
 
 def _check_program(site: _ExecSite, program: str) -> None:
@@ -1910,6 +1947,501 @@ pin_workload_versions = ItemCheck(
 )
 
 
+# --- charmcraft-summary-description -------------------------------------
+
+# `evaluate.py`'s `metadata_links` already gates presence and non-default
+# values for `summary` and `description` - that is not this item's to build.
+# What is left is the quality comparison between the two, which
+# `metadata_links` never makes: does `description` actually say more than
+# `summary`, or is it the same sentence reworded? See AI-ITEM-VALIDATION.md's
+# "Item 8" section and PLAN.md's design note for the real example this is
+# calibrated on (`forgejo-k8s`: summary "Charmed Kubernetes operator for
+# Forgejo.", description "Deploy and configure the software forge,
+# Forgejo." - barely longer, and not meaningfully more informative).
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+# Below this length ratio, `description` reads as "about the same length as
+# summary" rather than "a fuller description" - a real multi-sentence
+# description (evaluate.py's own default template runs to four paragraphs)
+# clears this by a wide margin. Combined with a minimum vocabulary overlap so
+# a short description that happens to share no words with summary (unrelated
+# content, not a paraphrase) is not swept in by length alone.
+_PARAPHRASE_MAX_LENGTH_RATIO = 2.0
+_PARAPHRASE_MIN_OVERLAP = 0.2
+
+
+def _normalise_words(text: str) -> list[str]:
+    return _WORD_RE.findall(text.lower())
+
+
+def gather_summary_description(source: CharmSource) -> Evidence:
+    """Collect the summary and description strings, nothing else."""
+    charmcraft = source.charmcraft_yaml()
+    summary = str(charmcraft.get('summary') or '')
+    description = str(charmcraft.get('description') or '')
+    lines = []
+    if summary:
+        lines.append(f'summary: {summary}')
+    if description:
+        lines.append(f'description: {description}')
+    return Evidence(lines=lines, data={'summary': summary, 'description': description})
+
+
+def decide_summary_description(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether description is a paraphrase of summary.
+
+    One confident branch only: description is not meaningfully longer than
+    summary and shares a good share of its vocabulary - a paraphrase, not a
+    fuller description. Everything else, including a charm that would
+    obviously pass, is left to a human - judging whether a longer
+    description is actually *good* (covers configuration, limitations,
+    deviations from the unpackaged application) is prose judgement this
+    check should not assert a PASS on.
+    """
+    checklist_id = 'charmcraft-summary-description'
+    summary: str = evidence.data.get('summary', '')
+    description: str = evidence.data.get('description', '')
+
+    if not summary or not description:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                'summary and/or description is missing (or metadata_links already flags it as '
+                'missing/default) - there is nothing to compare.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    summary_words = _normalise_words(summary)
+    description_words = _normalise_words(description)
+    if not summary_words:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale='summary has no comparable content to check description against.',
+            evidence=evidence.lines,
+        )
+
+    length_ratio = len(description_words) / len(summary_words)
+    overlap = len(set(summary_words) & set(description_words)) / len(set(summary_words))
+
+    if length_ratio < _PARAPHRASE_MAX_LENGTH_RATIO and overlap >= _PARAPHRASE_MIN_OVERLAP:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                'description is not meaningfully longer than summary and shares a good share '
+                'of its vocabulary - it reads as a paraphrase rather than a fuller description.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=(
+            'description is not a simple paraphrase of summary by length and overlap; whether '
+            'it is actually a good, detailed description needs a human to judge.'
+        ),
+        evidence=evidence.lines,
+    )
+
+
+summary_description = ItemCheck(
+    checklist_id='charmcraft-summary-description',
+    gather=gather_summary_description,
+    decide=decide_summary_description,
+)
+
+
+# --- best-practice-use-logging-not-print ---------------------------------
+
+# Upstream text: "avoid `print()` calls, and ensure that any subprocess calls
+# capture output." Two independent, differently-shaped clauses:
+#
+# * print() is a clean, standalone, purely mechanical AST pass - any
+#   first-party call to the bare `print` builtin. ruff's T201/T203 answer the
+#   same question and should be preferred once the listing-review ruff
+#   configuration exists; this stays until it does.
+# * "external commands capture their output" is *not* checked here, and is
+#   not checked anywhere. It has no ruff rule (nothing in flake8-bandit or
+#   pylint covers `capture_output=`), and the AST pass that used to answer it
+#   here went with the subprocess half of item 17, which ruff does better.
+#   canonical/charmlint#216 proposes it as a rule; until that lands, a charm
+#   tipping its workload's stderr into the Juju log passes this item.
+
+
+class _PrintVisitor(ast.NodeVisitor):
+    """Collect first-party calls to the bare ``print`` builtin."""
+
+    def __init__(self, relative_path: str):
+        self._path = relative_path
+        self.locations: list[str] = []
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id == 'print':
+            self.locations.append(f'{self._path}:{getattr(node, "lineno", 0)}')
+        self.generic_visit(node)
+
+
+def gather_logging_not_print(source: CharmSource) -> Evidence:
+    """Collect the charm's calls to the bare ``print`` builtin."""
+    prints: list[str] = []
+    unparsed: list[str] = []
+    for path in first_party_python_files(source.charm_path, source.charm_name):
+        relative = path.relative_to(source.charm_path).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+        except (SyntaxError, ValueError):
+            unparsed.append(relative)
+            continue
+        visitor = _PrintVisitor(relative)
+        visitor.visit(tree)
+        prints.extend(visitor.locations)
+
+    lines = [f'{location}: print()' for location in prints]
+    return Evidence(
+        lines=lines,
+        data={'prints': prints},
+        unread=[f'{path}: could not be parsed' for path in unparsed],
+    )
+
+
+def decide_logging_not_print(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether the charm writes to stdout instead of logging."""
+    checklist_id = 'best-practice-use-logging-not-print'
+    prints: list[str] = evidence.data.get('prints', [])
+
+    if prints:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=f'{len(prints)} call(s) to print() were found.',
+            evidence=evidence.lines,
+        )
+
+    # A file that would not parse caps this at NEEDS_HUMAN, in
+    # `ItemCheck.assess` rather than here.
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=(
+            'No print() calls were found. Whether external commands capture their output '
+            'is part of this item and is not checked - see the note above this check.'
+        ),
+    )
+
+
+logging_not_print = ItemCheck(
+    checklist_id='best-practice-use-logging-not-print',
+    gather=gather_logging_not_print,
+    decide=decide_logging_not_print,
+)
+
+
+# --- best-practice-no-sensitive-data-in-logs ------------------------------
+
+# AI-ITEM-VALIDATION.md's "Item 12 found a real violation" section is the
+# design brief: `forgejo-k8s`'s src/charm.py logged a whole database relation
+# databag at logger.debug immediately before reading the password out of it.
+# Three shapes are what credentials actually leak through and are greppable:
+# a whole relation databag, the charm's own `self.config` mapping, or
+# `os.environ`. This is deliberately not a general secret-scanner - logging
+# one specific field pulled out of any of those three (`data["endpoint"]`,
+# `self.config["some-key"]`) is not caught, and should not be guessed at.
+
+# `logger` is charm code's near-universal convention
+# (`logger = logging.getLogger(__name__)`, per operator's own template);
+# `logging.<level>` covers a direct call to the root logger. Both are "a
+# logging-module-shaped call" per the checklist item's own wording. A
+# receiver under any other name is a known, narrow gap, not a guess.
+_LOG_LEVELS = frozenset({'debug', 'info', 'warning', 'error', 'exception', 'critical'})
+
+
+@dataclasses.dataclass
+class _LogFinding:
+    """One logging call that logs a whole sensitive mapping."""
+
+    location: str
+    what: str
+
+
+class _LoggingVisitor(ast.NodeVisitor):
+    """Collect first-party logging calls whose argument is a sensitive shape.
+
+    Resolution follows the same "assigned exactly once to a local" idea
+    `_ExecVisitor` uses for command literals - charms routinely fetch data a
+    line or two before logging it, same as they build a command before
+    running it. The receiver shapes differ enough from command literals that
+    a shared helper is not obviously worth it, so this is its own small
+    scope-tracking pass rather than a reuse of `_ExecVisitor`'s.
+    """
+
+    def __init__(self, relative_path: str):
+        self._path = relative_path
+        self.findings: list[_LogFinding] = []
+        self.call_count = 0
+        self._scopes: list[dict[str, ast.expr]] = []
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._visit_scope(node, node.body)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_scope(node, node.body)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_scope(node, node.body)
+
+    def _visit_scope(self, node: ast.AST, body: list[ast.stmt]) -> None:
+        self._push_scope(body)
+        self.generic_visit(node)
+        self._scopes.pop()
+
+    def _push_scope(self, body: list[ast.stmt]) -> None:
+        assigned: dict[str, list[ast.expr]] = {}
+        for statement in ast.walk(ast.Module(body=body, type_ignores=[])):
+            if not isinstance(statement, ast.Assign):
+                continue
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    assigned.setdefault(target.id, []).append(statement.value)
+        self._scopes.append({
+            name: values[0] for name, values in assigned.items() if len(values) == 1
+        })
+
+    def _resolve(self, node: ast.expr) -> ast.expr:
+        if not isinstance(node, ast.Name):
+            return node
+        for scope in reversed(self._scopes):
+            if node.id in scope:
+                return scope[node.id]
+        return node
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        is_logging_call = (
+            isinstance(func, ast.Attribute)
+            and func.attr in _LOG_LEVELS
+            and (_is_name(func.value, 'logger') or _is_name(func.value, 'logging'))
+        )
+        if is_logging_call:
+            self.call_count += 1
+            location = f'{self._path}:{getattr(node, "lineno", 0)}'
+            seen: set[str] = set()
+            for argument in node.args:
+                what = _classify_sensitive(self._resolve(argument))
+                if what and what not in seen:
+                    seen.add(what)
+                    self.findings.append(_LogFinding(location=location, what=what))
+        self.generic_visit(node)
+
+
+def _classify_sensitive(node: ast.expr) -> str | None:
+    """Which of the three known-sensitive shapes ``node`` is, if any.
+
+    Only the whole-mapping shape is recognised - a subscript that pulls one
+    field out (``data["password"]``, ``self.config["key"]``) does not match
+    any branch here and is deliberately left alone.
+    """
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == 'fetch_relation_data':
+            return 'the return value of fetch_relation_data()'
+        return None
+    if isinstance(node, ast.Subscript):
+        value = node.value
+        if isinstance(value, ast.Attribute) and value.attr == 'data':
+            return 'a relation databag (`.data[...]`)'
+        return None
+    if isinstance(node, ast.Attribute):
+        if node.attr == 'config' and _is_name(node.value, 'self'):
+            return 'self.config'
+        if node.attr == 'environ' and _is_name(node.value, 'os'):
+            return 'os.environ'
+    return None
+
+
+def gather_sensitive_logging(source: CharmSource) -> Evidence:
+    """Collect first-party logging calls that log a whole sensitive mapping."""
+    findings: list[_LogFinding] = []
+    unparsed: list[str] = []
+    call_count = 0
+    for path in first_party_python_files(source.charm_path, source.charm_name):
+        relative = path.relative_to(source.charm_path).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+        except (SyntaxError, ValueError):
+            unparsed.append(relative)
+            continue
+        visitor = _LoggingVisitor(relative)
+        visitor.visit(tree)
+        findings.extend(visitor.findings)
+        call_count += visitor.call_count
+
+    lines = [f'{finding.location}: logs {finding.what}' for finding in findings]
+    lines.extend(f'{path}: could not be parsed' for path in unparsed)
+    return Evidence(
+        lines=lines,
+        data={'findings': findings, 'unparsed': unparsed, 'call_count': call_count},
+    )
+
+
+def decide_sensitive_logging(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether a logging call writes a whole sensitive mapping to the log."""
+    checklist_id = 'best-practice-no-sensitive-data-in-logs'
+    findings: list[_LogFinding] = evidence.data.get('findings', [])
+    unparsed: list[str] = evidence.data.get('unparsed', [])
+    call_count: int = evidence.data.get('call_count', 0)
+
+    if findings:
+        locations = ', '.join(sorted({finding.location for finding in findings}))
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(findings)} logging call(s) log a whole relation databag, `self.config`, '
+                f'or `os.environ` rather than a specific field: {locations}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    if unparsed:
+        # A file that could not be read might contain the very call this
+        # item is looking for - "we saw no logging calls" is not a claim
+        # this check can make while some of the source went unread.
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'No logging call was found to log a whole relation databag, `self.config`, or '
+                f'`os.environ`, but {len(unparsed)} file(s) could not be parsed.'
+            ),
+            evidence=[f'{path}: could not be parsed' for path in unparsed],
+        )
+
+    if not call_count:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm has no logging calls to check.',
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=(
+            f"None of the charm's {call_count} logging call(s) log a whole relation databag, "
+            f'`self.config`, or `os.environ`.'
+        ),
+    )
+
+
+sensitive_logging = ItemCheck(
+    checklist_id='best-practice-no-sensitive-data-in-logs',
+    gather=gather_sensitive_logging,
+    decide=decide_sensitive_logging,
+)
+
+
+# --- charmcraft-yaml-key-resources -----------------------------------------
+
+# Deliberately thin - see PLAN.md's "Item 23" design note. The only evidence
+# that lives in the repository is whether the item applies at all: a
+# `type: file` resource declared in `charmcraft.yaml`. Whether that resource
+# actually has a revision published for every architecture the charm claims
+# to support is a fact that lives entirely on Charmhub - `gather` here only
+# ever reads `CharmSource`, so answering that needs `ItemCheck` to grow the
+# ability to make a network call, which is a real design change (shared with
+# item #2, the Charmhub-page item) to be made explicitly, once, not implied
+# by this item's implementation. Until then: NOT_APPLICABLE for no `file`
+# resource (a real, free result) and NEEDS_HUMAN otherwise, naming the
+# declared resources and the charm's claimed architectures.
+
+
+def _platform_architectures(charmcraft: dict[str, Any]) -> list[str]:
+    """Architectures the charm claims to support, from `platforms:`.
+
+    A platform key is either a bare architecture (``amd64``) or
+    ``<base>@<version>:<arch>``; only the part after the last ``:`` is the
+    architecture.
+    """
+    platforms = charmcraft.get('platforms')
+    if not isinstance(platforms, dict):
+        return []
+    return sorted({str(key).rsplit(':', 1)[-1] for key in platforms})
+
+
+def gather_resource_architectures(source: CharmSource) -> Evidence:
+    """Collect declared `type: file` resources and the charm's claimed archs."""
+    charmcraft = source.charmcraft_yaml()
+    resources = charmcraft.get('resources')
+    resources = resources if isinstance(resources, dict) else {}
+
+    file_resources = sorted(
+        str(name)
+        for name, definition in resources.items()
+        if isinstance(definition, dict) and definition.get('type') == 'file'
+    )
+    architectures = _platform_architectures(charmcraft)
+
+    lines = [f'{name}: `type: file` resource' for name in file_resources]
+    lines.extend(f'claims to support: {arch}' for arch in architectures)
+    return Evidence(
+        lines=lines,
+        data={'file_resources': file_resources, 'architectures': architectures},
+    )
+
+
+def decide_resource_architectures(evidence: Evidence) -> ItemAssessment:
+    """Rule on binary-resource architecture coverage - as far as it can be judged.
+
+    Whether each declared `file` resource has a published revision for every
+    claimed architecture is a Charmhub-only fact this check has no way to
+    read; see the module comment above. What is free: whether the item
+    applies at all.
+    """
+    checklist_id = 'charmcraft-yaml-key-resources'
+    file_resources: list[str] = evidence.data.get('file_resources', [])
+    architectures: list[str] = evidence.data.get('architectures', [])
+
+    if not file_resources:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm declares no `type: file` resource.',
+        )
+
+    names = ', '.join(file_resources)
+    if architectures:
+        archs = ', '.join(architectures)
+        rationale = (
+            f'The charm declares {len(file_resources)} `type: file` resource(s) ({names}) and '
+            f'claims to support {archs}; whether each has a published revision for every one '
+            f'of those architectures can only be checked on Charmhub.'
+        )
+    else:
+        rationale = (
+            f'The charm declares {len(file_resources)} `type: file` resource(s) ({names}) but '
+            f'names no `platforms`, so the architectures to check on Charmhub are not stated '
+            f'here.'
+        )
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=rationale,
+        evidence=evidence.lines,
+    )
+
+
+resource_architectures = ItemCheck(
+    checklist_id='charmcraft-yaml-key-resources',
+    gather=gather_resource_architectures,
+    decide=decide_resource_architectures,
+)
+
+
 ITEM_CHECKS: dict[str, ItemCheck] = {
     check.checklist_id: check
     for check in (
@@ -1920,5 +2452,9 @@ ITEM_CHECKS: dict[str, ItemCheck] = {
         dependency_update_tooling,
         avoid_charm_plugin,
         pin_workload_versions,
+        summary_description,
+        logging_not_print,
+        sensitive_logging,
+        resource_architectures,
     )
 }

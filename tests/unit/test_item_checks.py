@@ -29,9 +29,13 @@ from charmhub_listing_review.item_checks import (
     dependency_update_tooling,
     first_party_python_files,
     integration_tests,
+    logging_not_print,
     no_duplicate_model_config,
     pin_workload_versions,
+    resource_architectures,
     safe_subprocess,
+    sensitive_logging,
+    summary_description,
 )
 
 
@@ -81,6 +85,36 @@ class TestFirstPartyPythonFiles:
         charm = _charm(tmp_path, **{'src/charm.py': '', 'tests/unit/test_charm.py': ''})
         found = [p.relative_to(charm).as_posix() for p in first_party_python_files(charm)]
         assert found == ['src/charm.py']
+
+    def test_excludes_github_and_docs_tooling(self, tmp_path: pathlib.Path):
+        """CI/doc-build tooling the author wrote, but Juju never runs.
+
+        Found by running item 10 against real charms: `charm-ubuntu`'s
+        `.github/check-conventional-pr-title.py` and `zookeeper-operator`'s
+        `docs/.sphinx/get_vale_conf.py` both surfaced print() findings that
+        have nothing to do with the charm's own logging behaviour.
+        """
+        charm = _charm(
+            tmp_path,
+            **{
+                'src/charm.py': '',
+                '.github/check-pr-title.py': '',
+                'docs/.sphinx/get_vale_conf.py': '',
+            },
+        )
+        found = [p.relative_to(charm).as_posix() for p in first_party_python_files(charm)]
+        assert found == ['src/charm.py']
+
+    def test_includes_scripts_deployed_onto_the_workload(self, tmp_path: pathlib.Path):
+        """`scripts/` is charm runtime behaviour under a different name.
+
+        postgresql-operator deploys `scripts/rotate_logs.py` onto the target
+        machine and runs it there - unlike `.github`/`docs`, this is not
+        build-time tooling.
+        """
+        charm = _charm(tmp_path, **{'src/charm.py': '', 'scripts/rotate_logs.py': ''})
+        found = [p.relative_to(charm).as_posix() for p in first_party_python_files(charm)]
+        assert found == ['scripts/rotate_logs.py', 'src/charm.py']
 
 
 class TestSafeSubprocess:
@@ -1194,3 +1228,281 @@ class TestPinWorkloadVersionsMachine:
 
     def test_registered_under_its_checklist_id(self):
         assert ITEM_CHECKS['best-practice-pin-workload-versions'] is pin_workload_versions
+
+
+_LONG_DESCRIPTION = (
+    'A Juju charm that deploys and manages the Example workload on Kubernetes. It provides a '
+    'web interface for exploring data, and integrates with several other charms over Juju '
+    'relations. Configuration options let you tune resource limits, enable TLS, and control '
+    'log verbosity. Deviations from the unpackaged application: the charm always runs as a '
+    'non-root user and disables the built-in scheduler in favour of Juju.'
+)
+
+
+class TestSummaryDescription:
+    def test_paraphrased_description_fails(self, tmp_path: pathlib.Path):
+        """The real forgejo-k8s example: description barely longer than summary."""
+        charmcraft = (
+            'name: my-charm\n'
+            'summary: Charmed Kubernetes operator for Forgejo.\n'
+            'description: Deploy and configure the software forge, Forgejo.\n'
+        )
+        assessment = summary_description.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'paraphrase' in assessment.rationale
+
+    def test_much_longer_description_needs_a_human(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\n'
+            'summary: Data visualization and observability with Example.\n'
+            f'description: |\n  {_LONG_DESCRIPTION}\n'
+        )
+        assessment = summary_description.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_short_but_unrelated_description_needs_a_human(self, tmp_path: pathlib.Path):
+        """Short and low-overlap: not a confident paraphrase, not a guessed pass either."""
+        charmcraft = (
+            'name: my-charm\n'
+            'summary: A pristine Ubuntu Server\n'
+            'description: This simply deploys the Ubuntu Cloud/Server image\n'
+        )
+        assessment = summary_description.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_missing_description_needs_a_human(self, tmp_path: pathlib.Path):
+        assessment = summary_description.assess(
+            _source(tmp_path, **{'charmcraft.yaml': 'name: my-charm\nsummary: Foo.\n'})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['charmcraft-summary-description'] is summary_description
+
+
+class TestLoggingNotPrint:
+    def test_no_print_no_commands_passes(self, tmp_path: pathlib.Path):
+        assessment = logging_not_print.assess(
+            _source(tmp_path, **{'src/charm.py': 'import ops\nlogger.info("hi")\n'})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_print_call_fails(self, tmp_path: pathlib.Path):
+        assessment = logging_not_print.assess(
+            _source(tmp_path, **{'src/charm.py': 'print("debugging")\n'})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'print()' in assessment.rationale
+
+    def test_captured_container_exec_passes(self, tmp_path: pathlib.Path):
+        assessment = logging_not_print.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        "import ops\noutput, _ = container.exec(['/usr/bin/id']).wait_output()\n"
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_print_outranks_undecidable_capture(self, tmp_path: pathlib.Path):
+        """A settled failure is reported even when another site is unclear."""
+        assessment = logging_not_print.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        'import ops\n'
+                        "print('debug')\n"
+                        "proc = container.exec(['/usr/bin/id'])\n"
+                        'proc.wait_output()\n'
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_findings_in_vendored_libs_are_not_the_charms_problem(self, tmp_path: pathlib.Path):
+        assessment = logging_not_print.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': 'import ops\n',
+                    'lib/charms/someone_else/v0/their_lib.py': 'print("not our problem")\n',
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['best-practice-use-logging-not-print'] is logging_not_print
+
+
+class TestSensitiveLogging:
+    def test_no_logging_calls_is_not_applicable(self, tmp_path: pathlib.Path):
+        assessment = sensitive_logging.assess(
+            _source(tmp_path, **{'src/charm.py': 'import ops\n'})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_logging_a_fetch_relation_data_result_fails(self, tmp_path: pathlib.Path):
+        """The real forgejo-k8s finding: a databag logged right before reading a password."""
+        assessment = sensitive_logging.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        'relations = self.database.fetch_relation_data()\n'
+                        'logger.debug("Got following database data: %s", relations)\n'
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert any('fetch_relation_data' in line for line in assessment.evidence)
+
+    def test_logging_a_relation_databag_subscript_fails(self, tmp_path: pathlib.Path):
+        assessment = sensitive_logging.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        'bag = relation.data[self.unit]\nlogger.debug("unit data: %s", bag)\n'
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_logging_self_config_fails(self, tmp_path: pathlib.Path):
+        assessment = sensitive_logging.assess(
+            _source(tmp_path, **{'src/charm.py': 'logger.debug("config: %s", self.config)\n'})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'self.config' in assessment.rationale
+
+    def test_logging_os_environ_fails(self, tmp_path: pathlib.Path):
+        assessment = sensitive_logging.assess(
+            _source(
+                tmp_path,
+                **{'src/charm.py': 'import os\nlogger.debug("env: %s", os.environ)\n'},
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'os.environ' in assessment.rationale
+
+    def test_logging_one_field_is_not_caught(self, tmp_path: pathlib.Path):
+        """Real forgejo-k8s code today: logs one extracted field, not the whole databag."""
+        assessment = sensitive_logging.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': (
+                        'for data in relations.values():\n'
+                        '    logger.info("New database endpoint is %s", data["endpoints"])\n'
+                    )
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_logging_calls_with_no_sensitive_shape_passes(self, tmp_path: pathlib.Path):
+        assessment = sensitive_logging.assess(
+            _source(tmp_path, **{'src/charm.py': 'logger.info("Reconciling workload state")\n'})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_unparsed_file_with_no_finding_needs_a_human(self, tmp_path: pathlib.Path):
+        assessment = sensitive_logging.assess(
+            _source(tmp_path, **{'src/charm.py': 'def broken(:\n'})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_findings_in_vendored_libs_are_not_the_charms_problem(self, tmp_path: pathlib.Path):
+        assessment = sensitive_logging.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': 'import ops\n',
+                    'lib/charms/someone_else/v0/their_lib.py': (
+                        'logger.debug("dump: %s", self.config)\n'
+                    ),
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['best-practice-no-sensitive-data-in-logs'] is sensitive_logging
+
+
+class TestResourceArchitectures:
+    def test_no_resources_is_not_applicable(self, tmp_path: pathlib.Path):
+        assessment = resource_architectures.assess(
+            _source(tmp_path, **{'charmcraft.yaml': 'name: my-charm\n'})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_oci_image_only_is_not_applicable(self, tmp_path: pathlib.Path):
+        """An OCI reference is item 16's territory, not this item's."""
+        charmcraft = (
+            'name: my-charm\n'
+            'containers:\n  workload:\n    resource: my-image\n'
+            'resources:\n  my-image:\n    type: oci-image\n    description: OCI image\n'
+        )
+        assessment = resource_architectures.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_file_resource_needs_a_human(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\n'
+            'resources:\n'
+            '  lxd-binary:\n    type: file\n    filename: lxd\n    description: The LXD binary\n'
+            'platforms:\n  ubuntu@24.04:amd64:\n  ubuntu@24.04:arm64:\n'
+        )
+        assessment = resource_architectures.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'lxd-binary' in assessment.rationale
+        assert 'amd64' in assessment.rationale
+        assert 'arm64' in assessment.rationale
+
+    def test_file_resource_with_bare_architecture_platforms(self, tmp_path: pathlib.Path):
+        """A platform key can be a bare architecture, not just `<base>@<version>:<arch>`."""
+        charmcraft = (
+            'name: my-charm\n'
+            'resources:\n'
+            '  my-binary:\n    type: file\n    filename: bin\n    description: A binary\n'
+            'platforms:\n  amd64:\n'
+        )
+        assessment = resource_architectures.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'amd64' in assessment.rationale
+
+    def test_file_resource_with_no_platforms_needs_a_human(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\n'
+            'resources:\n'
+            '  my-binary:\n    type: file\n    filename: bin\n    description: A binary\n'
+        )
+        assessment = resource_architectures.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'my-binary' in assessment.rationale
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['charmcraft-yaml-key-resources'] is resource_architectures
