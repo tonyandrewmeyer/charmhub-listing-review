@@ -54,6 +54,7 @@ import pathlib
 import re
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -2442,6 +2443,267 @@ resource_architectures = ItemCheck(
 )
 
 
+# --- best-practice-libraries-no-status-mutation ---------------------------
+
+# AI-ITEM-VALIDATION.md's "Item 15 needs scoping or it fails every charm"
+# section is the whole design: judged against every file under `lib/`, this
+# item fails almost any charm on code its author did not write - a charm
+# typically vendors far more third-party charmlibs than it publishes its
+# own. Scoped to `lib/charms/<this charm's name>/` - the library or
+# libraries the repository *publishes* - the same scoping
+# `first_party_python_files` already applies everywhere else in this module,
+# just intersected with the library-only subtree rather than every
+# first-party file. See PLAN.md's design note for the real-charm evidence
+# behind both the scoping and the AST pattern below.
+
+
+@dataclasses.dataclass
+class _StatusMutation:
+    """One place an own-published library sets unit or application status."""
+
+    location: str
+    receiver: str
+    """``'unit'`` or ``'app'``."""
+
+
+class _StatusMutationVisitor(ast.NodeVisitor):
+    """Collect assignments to ``<...>.unit.status`` or ``<...>.app.status``.
+
+    Real mutation sites vary in how many attributes come before ``unit``/
+    ``app`` - ``self.unit.status``, ``self.model.unit.status``,
+    ``self.model.app.status``, ``self.charm.unit.status`` are all real,
+    live examples found across this project's vendored charmlibs (see
+    PLAN.md). Only the last two attributes of the assignment target matter,
+    the same "receiver name varies too much to match on" reasoning
+    `_add_container_exec` already uses for ``container.exec``.
+    """
+
+    def __init__(self, relative_path: str):
+        self._path = relative_path
+        self.mutations: list[_StatusMutation] = []
+
+    def _check_targets(self, targets: list[ast.expr], node: ast.AST) -> None:
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and target.attr == 'status'
+                and isinstance(target.value, ast.Attribute)
+                and target.value.attr in ('unit', 'app')
+            ):
+                self.mutations.append(
+                    _StatusMutation(
+                        location=f'{self._path}:{getattr(node, "lineno", 0)}',
+                        receiver=target.value.attr,
+                    )
+                )
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self._check_targets(node.targets, node)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self._check_targets([node.target], node)
+        self.generic_visit(node)
+
+
+def _own_library_files(source: CharmSource) -> list[pathlib.Path]:
+    """The Python files under the charm's own published ``lib/charms/`` tree."""
+    return [
+        path
+        for path in first_party_python_files(source.charm_path, source.charm_name)
+        if path.relative_to(source.charm_path).parts[:2] == _LIB_CHARMS
+    ]
+
+
+def gather_library_status_mutation(source: CharmSource) -> Evidence:
+    """Collect status-mutation sites in the charm's own published library."""
+    mutations: list[_StatusMutation] = []
+    unparsed: list[str] = []
+    files = _own_library_files(source)
+    for path in files:
+        relative = path.relative_to(source.charm_path).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+        except (SyntaxError, ValueError):
+            unparsed.append(relative)
+            continue
+        visitor = _StatusMutationVisitor(relative)
+        visitor.visit(tree)
+        mutations.extend(visitor.mutations)
+
+    lines = [f'{m.location}: sets .{m.receiver}.status' for m in mutations]
+    lines.extend(f'{path}: could not be parsed' for path in unparsed)
+    return Evidence(
+        lines=lines,
+        data={'mutations': mutations, 'unparsed': unparsed, 'own_library_file_count': len(files)},
+    )
+
+
+def decide_library_status_mutation(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether the charm's own library mutates unit/app status."""
+    checklist_id = 'best-practice-libraries-no-status-mutation'
+    mutations: list[_StatusMutation] = evidence.data.get('mutations', [])
+    unparsed: list[str] = evidence.data.get('unparsed', [])
+    own_library_file_count: int = evidence.data.get('own_library_file_count', 0)
+
+    if mutations:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f"{len(mutations)} location(s) in the charm's own published library set "
+                f'unit or application status directly, rather than returning a value or '
+                f'raising an exception for the charm to handle.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    if unparsed:
+        # A file that could not be read might contain the very mutation this
+        # item is looking for - "the library does not mutate status" is not a
+        # claim this check can make while some of it went unread.
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f"No status mutation was found in the charm's own published library, but "
+                f'{len(unparsed)} file(s) could not be parsed.'
+            ),
+            evidence=[f'{path}: could not be parsed' for path in unparsed],
+        )
+
+    if not own_library_file_count:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm does not publish its own library under lib/charms/.',
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=(
+            f"None of the charm's {own_library_file_count} own library file(s) set unit or "
+            f'application status directly.'
+        ),
+    )
+
+
+library_status_mutation = ItemCheck(
+    checklist_id='best-practice-libraries-no-status-mutation',
+    gather=gather_library_status_mutation,
+    decide=decide_library_status_mutation,
+)
+
+
+# --- charmcraft-yaml-key-documentation --------------------------------------
+
+# This item's evidence, like item 23's and item 25's, is not one of
+# canonical/operator's best-practice admonitions with a `:name:` anchor - it
+# is charmcraft's own `links` file-reference page. The checklist_id below is
+# this module's own placeholder, reusing the referenced sphinx target name
+# verbatim (`{external+charmcraft:ref}` links <charmcraft-yaml-key-documentation>``
+# in the live best-practices.txt), the same precedent item 23's
+# `charmcraft-yaml-key-resources` set.
+#
+# See PLAN.md's design note for why "documentation and website resolve to
+# the same domain" is the one confident violation shape this check can name
+# without positively confirming a documentation link's content: it rules out
+# "documentation is just pointing back at the vendor's own site", it does
+# not rule in "this is definitely charm-specific content".
+
+
+def _link_value(links: dict[str, Any], key: str) -> str:
+    """Read a `links.<key>` value, which may be a bare string or a list."""
+    value = links.get(key)
+    if isinstance(value, list):
+        return str(value[0]) if value else ''
+    return str(value or '')
+
+
+def _domain(url: str) -> str:
+    """The registrable-ish domain of a URL, for a cheap same-site comparison."""
+    host = urlparse(url).netloc.lower()
+    return host.removeprefix('www.')
+
+
+def gather_documentation_link(source: CharmSource) -> Evidence:
+    """Collect the `documentation` and `website` links, nothing else."""
+    charmcraft = source.charmcraft_yaml()
+    links = charmcraft.get('links')
+    links = links if isinstance(links, dict) else {}
+    documentation = _link_value(links, 'documentation')
+    website = _link_value(links, 'website')
+
+    lines = []
+    if documentation:
+        lines.append(f'documentation: {documentation}')
+    if website:
+        lines.append(f'website: {website}')
+    return Evidence(lines=lines, data={'documentation': documentation, 'website': website})
+
+
+def decide_documentation_link(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether `documentation` looks like it is really `website`.
+
+    One confident branch: `documentation` and `website` resolve to the same
+    domain, which means `documentation` is not pointing anywhere different
+    from the charmed application's own site. Everything else - no
+    `documentation` link at all, or one that is on a different domain from
+    `website` (or there is no `website` to compare against) - defers, per
+    the module's standing rule that a check should not guess a PASS it
+    cannot back up.
+    """
+    checklist_id = 'charmcraft-yaml-key-documentation'
+    documentation: str = evidence.data.get('documentation', '')
+    website: str = evidence.data.get('website', '')
+
+    if not documentation:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm declares no `documentation` link.',
+        )
+
+    documentation_domain = _domain(documentation)
+    if website and documentation_domain and documentation_domain == _domain(website):
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'`documentation` ({documentation}) and `website` ({website}) resolve to the '
+                f'same domain, so `documentation` does not look like charm-specific content.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    if website:
+        rationale = (
+            f'`documentation` ({documentation}) is on a different domain than `website` '
+            f'({website}); whether its content is actually about the charm still needs a '
+            f'human to check.'
+        )
+    else:
+        rationale = (
+            f'`documentation` ({documentation}) is set, but there is no `website` link to '
+            f'compare it against; whether its content is about the charm needs a human '
+            f'to check.'
+        )
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=rationale,
+        evidence=evidence.lines,
+    )
+
+
+documentation_link = ItemCheck(
+    checklist_id='charmcraft-yaml-key-documentation',
+    gather=gather_documentation_link,
+    decide=decide_documentation_link,
+)
+
+
 ITEM_CHECKS: dict[str, ItemCheck] = {
     check.checklist_id: check
     for check in (
@@ -2456,5 +2718,7 @@ ITEM_CHECKS: dict[str, ItemCheck] = {
         logging_not_print,
         sensitive_logging,
         resource_architectures,
+        library_status_mutation,
+        documentation_link,
     )
 }

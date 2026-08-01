@@ -27,8 +27,10 @@ from charmhub_listing_review.item_checks import (
     automated_releasing,
     avoid_charm_plugin,
     dependency_update_tooling,
+    documentation_link,
     first_party_python_files,
     integration_tests,
+    library_status_mutation,
     logging_not_print,
     no_duplicate_model_config,
     pin_workload_versions,
@@ -1506,3 +1508,163 @@ class TestResourceArchitectures:
 
     def test_registered_under_its_checklist_id(self):
         assert ITEM_CHECKS['charmcraft-yaml-key-resources'] is resource_architectures
+
+
+class TestLibraryStatusMutation:
+    def test_no_own_library_is_not_applicable(self, tmp_path: pathlib.Path):
+        assessment = library_status_mutation.assess(
+            _source(
+                tmp_path,
+                **{
+                    'src/charm.py': 'import ops\n',
+                    'lib/charms/someone_else/v0/their_lib.py': (
+                        'self.unit.status = BlockedStatus("bad")\n'
+                    ),
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_own_library_setting_unit_status_fails(self, tmp_path: pathlib.Path):
+        assessment = library_status_mutation.assess(
+            _source(
+                tmp_path,
+                **{
+                    'lib/charms/my_charm/v0/my_lib.py': (
+                        'self.unit.status = BlockedStatus("bad")\n'
+                    ),
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert '.unit.status' in assessment.rationale or 'unit or application status' in (
+            assessment.rationale
+        )
+
+    def test_own_library_setting_app_status_via_model_fails(self, tmp_path: pathlib.Path):
+        """The `self.model.app.status = ...` shape rolling_ops uses - a longer chain."""
+        assessment = library_status_mutation.assess(
+            _source(
+                tmp_path,
+                **{
+                    'lib/charms/my_charm/v0/my_lib.py': (
+                        'self.model.app.status = ActiveStatus()\n'
+                    ),
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_own_library_with_no_mutation_passes(self, tmp_path: pathlib.Path):
+        assessment = library_status_mutation.assess(
+            _source(
+                tmp_path,
+                **{
+                    'lib/charms/my_charm/v0/my_lib.py': (
+                        'def check(self):\n    return self.unit.status\n'
+                    ),
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_status_comparison_is_not_a_mutation(self, tmp_path: pathlib.Path):
+        """Reading/comparing status is not setting it - only an assignment target matters."""
+        assessment = library_status_mutation.assess(
+            _source(
+                tmp_path,
+                **{
+                    'lib/charms/my_charm/v0/my_lib.py': (
+                        'if self.unit.status == ActiveStatus():\n    pass\n'
+                    ),
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_unparsed_own_library_file_needs_a_human(self, tmp_path: pathlib.Path):
+        assessment = library_status_mutation.assess(
+            _source(tmp_path, **{'lib/charms/my_charm/v0/my_lib.py': 'def broken(:\n'})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_vendored_library_mutation_is_not_the_charms_problem(self, tmp_path: pathlib.Path):
+        """The real shape found across this project's vendored charmlibs - not scoped in."""
+        assessment = library_status_mutation.assess(
+            _source(
+                tmp_path,
+                **{
+                    'lib/charms/data_platform_libs/v0/upgrade.py': (
+                        'self.charm.unit.status = BlockedStatus(cause)\n'
+                    ),
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['best-practice-libraries-no-status-mutation'] is library_status_mutation
+
+
+class TestDocumentationLink:
+    def test_no_documentation_link_is_not_applicable(self, tmp_path: pathlib.Path):
+        charmcraft = 'name: my-charm\nlinks:\n  issues:\n    - https://example.com/issues\n'
+        assessment = documentation_link.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_no_links_block_at_all_is_not_applicable(self, tmp_path: pathlib.Path):
+        assessment = documentation_link.assess(
+            _source(tmp_path, **{'charmcraft.yaml': 'name: my-charm\n'})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_documentation_matching_website_domain_fails(self, tmp_path: pathlib.Path):
+        """The violation shape the item describes: documentation is just the app's own site."""
+        charmcraft = (
+            'name: my-charm\n'
+            'links:\n'
+            '  documentation: https://example.com/docs\n'
+            '  website:\n    - https://example.com\n'
+        )
+        assessment = documentation_link.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'example.com' in assessment.rationale
+
+    def test_documentation_matching_website_with_www_prefix_fails(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\n'
+            'links:\n'
+            '  documentation: https://www.example.com/docs\n'
+            '  website:\n    - https://example.com\n'
+        )
+        assessment = documentation_link.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_documentation_on_a_different_domain_needs_a_human(self, tmp_path: pathlib.Path):
+        """The real forgejo-k8s shape: documentation is the repo's own README, not the app's."""
+        charmcraft = (
+            'name: my-charm\n'
+            'links:\n'
+            '  documentation: https://github.com/canonical/my-charm/blob/main/README.md\n'
+            '  website:\n    - https://example.org\n'
+        )
+        assessment = documentation_link.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_documentation_with_no_website_to_compare_needs_a_human(self, tmp_path: pathlib.Path):
+        charmcraft = 'name: my-charm\nlinks:\n  documentation: https://example.com/docs\n'
+        assessment = documentation_link.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['charmcraft-yaml-key-documentation'] is documentation_link
