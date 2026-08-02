@@ -44,6 +44,7 @@ Avoid using `head` and `tail` with these commands, as that masks issues.
 ### Entry Points (defined in pyproject.toml)
 - `update-issue`: Updates GitHub issues with review checklists (`src/charmhub_listing_review/update_issue.py`)
 - `self-review`: CLI tool for charm authors to self-check before submitting (`src/charmhub_listing_review/self_review.py`)
+- `remind`: Posts reminders on stalled listing-request issues (`src/charmhub_listing_review/remind.py`); run daily by `.github/workflows/remind.yaml`
 
 ### Core Modules
 
@@ -52,6 +53,8 @@ Avoid using `head` and `tail` with these commands, as that masks issues.
 **`update_issue.py`** - GitHub issue management. Extracts data from listing request issues, generates reviewer checklists (including best practices fetched from canonical/operator), assigns reviewers from `reviewers.yaml`, and posts/updates comments via `gh` CLI.
 
 **`self_review.py`** - Console-friendly version of the evaluation for charm authors to run locally before submitting.
+
+**`remind.py`** - Scheduled reminder poster. Iterates open `listing-request` issues, computes days since the last non-reminder activity, and posts a reminder pinging the current assignees when the issue has been idle past the `--remind-after` threshold. Escalates to `@canonical/charm-tech` once idle past `--escalate-after`. Reminders it posts carry an HTML-comment marker so subsequent runs don't mistake them for human activity and reset the clock.
 
 ### Reviewer Assignment
 `reviewers.yaml` maps GitHub usernames to charming teams. The `assign_review()` function randomly selects a team, then a reviewer from that team.
