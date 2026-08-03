@@ -29,12 +29,12 @@ import math
 import pathlib
 import re
 import shutil
-import subprocess  # noqa: S404
+import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import tempfile
 import tomllib
 import urllib.error
 import urllib.request
-import xml.etree.ElementTree as ET  # noqa: S405
+import xml.etree.ElementTree as ET  # ruff: ignore[suspicious-xml-etree-import]
 from typing import Any
 
 import yaml
@@ -45,8 +45,8 @@ from ._models import CheckResult, EvaluationResult
 def _url_ok(url: str, *, method: str = 'HEAD', timeout: int = 5) -> bool:
     """Whether ``url`` resolves with a successful (non-error) status."""
     try:
-        request = urllib.request.Request(url, method=method)  # noqa: S310
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+        request = urllib.request.Request(url, method=method)  # ruff: ignore[suspicious-url-open-usage]
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # ruff: ignore[suspicious-url-open-usage]
             # file:// responses have no status; a successful urlopen means the file exists.
             return response.status is None or response.status < 400
     except (urllib.error.URLError, OSError, ValueError):
@@ -56,8 +56,8 @@ def _url_ok(url: str, *, method: str = 'HEAD', timeout: int = 5) -> bool:
 def _fetch_url(url: str, *, timeout: int = 5) -> str | None:
     """Fetch ``url`` as text, or return ``None`` on any error or non-2xx/3xx status."""
     try:
-        request = urllib.request.Request(url, method='GET')  # noqa: S310
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+        request = urllib.request.Request(url, method='GET')  # ruff: ignore[suspicious-url-open-usage]
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # ruff: ignore[suspicious-url-open-usage]
             if response.status is not None and response.status >= 400:
                 return None
             return response.read().decode('utf-8', errors='replace')
@@ -164,11 +164,11 @@ def contribution_guidelines(contribution_url: str) -> CheckResult:
 
 
 _known_licenses = {
-    'fdae7ed259455ca9fa45939e7f25cbb4de29831cda16d9151de25a5f6e9d9be43b053f4fd3b896026239fca77abce04f543d591c501ecf4ce18c854bc0a51660',  # Apache 2.0  # noqa: E501
-    '5ae83c5b0ac7ed6469b38ed11f33b3d1dfabc9eaee8fff6a2e3d5e23b45e5f899a2bec93865c33868e83d0c8e4bff2c0dd0ebf0c3a390903a1f4d9ac7d9ab29e',  # GPL 2  # noqa: E501
-    '56a2f53e2df8adf4b55edf328579a74b1358f7f177b5242bd97dd79a8d26bc93f9dcc96dbdd6854627a96b73deb9ccaada6862f581ad1c8f6a2f3fe0849db005',  # GPL 3  # noqa: E501
-    '0906b47a8ae8ec763c6e548f42582d82fd8c8fa62403cd2b00a94d547277c98e65ce9d505d476b707c10c8aacd2d8094c594ba1e12d3c67cd658981c4bd2fe83',  # LGPL 3  # noqa: E501
-    'f5a0456e775e047c6c91571cf004a42cd04b3962ee882bc7c23d62a9a4d95bb310bfaaeb6a16bd777990eb564cc6c9ef13d7b3028f0d62ed2636ca083de6439a',  # MPL 2.0  # noqa: E501
+    'fdae7ed259455ca9fa45939e7f25cbb4de29831cda16d9151de25a5f6e9d9be43b053f4fd3b896026239fca77abce04f543d591c501ecf4ce18c854bc0a51660',  # Apache 2.0  # ruff: ignore[line-too-long]
+    '5ae83c5b0ac7ed6469b38ed11f33b3d1dfabc9eaee8fff6a2e3d5e23b45e5f899a2bec93865c33868e83d0c8e4bff2c0dd0ebf0c3a390903a1f4d9ac7d9ab29e',  # GPL 2  # ruff: ignore[line-too-long]
+    '56a2f53e2df8adf4b55edf328579a74b1358f7f177b5242bd97dd79a8d26bc93f9dcc96dbdd6854627a96b73deb9ccaada6862f581ad1c8f6a2f3fe0849db005',  # GPL 3  # ruff: ignore[line-too-long]
+    '0906b47a8ae8ec763c6e548f42582d82fd8c8fa62403cd2b00a94d547277c98e65ce9d505d476b707c10c8aacd2d8094c594ba1e12d3c67cd658981c4bd2fe83',  # LGPL 3  # ruff: ignore[line-too-long]
+    'f5a0456e775e047c6c91571cf004a42cd04b3962ee882bc7c23d62a9a4d95bb310bfaaeb6a16bd777990eb564cc6c9ef13d7b3028f0d62ed2636ca083de6439a',  # MPL 2.0  # ruff: ignore[line-too-long]
 }
 
 
@@ -853,7 +853,7 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
             checklist_id='charm-has-icon',
             optional=True,
         )
-    tree = ET.parse(icon_path)  # noqa: S314
+    tree = ET.parse(icon_path)  # ruff: ignore[suspicious-xml-element-tree-usage]
     root = tree.getroot()
     width = root.attrib.get('width')
     height = root.attrib.get('height')
@@ -979,7 +979,7 @@ If the charm provides a general library, the library's module docstring must con
 * [ ] the purpose of the library
 * [ ] the intended audience for the library: is this library intended for use only by the charm or the charming team, or is it a public library intended for anyone to use in their charm?
 * [ ] guidance on how to start using the library
-""".strip(),  # noqa: E501
+""".strip(),  # ruff: ignore[line-too-long]
         )
     )
     # fmt: on

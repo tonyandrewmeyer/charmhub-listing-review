@@ -94,7 +94,7 @@ def print_self_review_results(
 * [ ] Integration tests exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`. <!-- id: ci-integration-tests -->
 
     ### Documentation
-    """.strip()  # noqa: E501
+    """.strip()  # ruff: ignore[line-too-long]
     comment = (
         fixed_checks + '\n\n' + comment.split('### Documentation', 1)[1].split('</details>', 1)[0]
     )
