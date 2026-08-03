@@ -14,7 +14,7 @@
 
 """Test the automated criteria evaluation."""
 
-import subprocess  # noqa: S404
+import subprocess  # ruff: ignore[suspicious-subprocess-import]
 from unittest import mock
 
 import pytest

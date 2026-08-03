@@ -89,7 +89,7 @@ select = [
     "E",
     "W",
     # isort
-    "I001",
+    "unsorted-imports",
     # pep8-naming
     "N",
     # flake8-builtins
@@ -119,36 +119,36 @@ select = [
 ]
 ignore = [
     # Move application import into a type-checking block
-    "TC001",
+    "typing-only-first-party-import",
     # Move third-party import into a type-checking block
-    "TC002",
+    "typing-only-third-party-import",
     # Move standard library import into a type-checking block
-    "TC003",
+    "typing-only-standard-library-import",
     # Use of `assert` detected
-    "S101",
+    "assert",
 
     # Return condition directly, prefer readability.
-    "SIM103",
+    "needless-bool",
     # Use contextlib.suppress() instead of try/except: pass
-    "SIM105",
+    "suppressible-exception",
     # Use a single `with` statement with multiple contexts instead of nested `with` statements
-    "SIM117",
+    "multiple-with-statements",
 
     # Missing docstring in magic method
-    "D105",
+    "undocumented-magic-method",
     # Missing docstring in `__init__`
-    "D107",
+    "undocumented-public-init",
 
     # Manual dict comprehension.
-    "PERF403",
+    "manual-dict-comprehension",
 
     # Subprocess calls - not using an absolute path, and having some user content.
     # There's a lot of calls to `gh` in the core processing here, and the code
     # typically runs in CI, which mitigates most of the risk. We're rather just
     # be careful and consider the risks of each call without having to scatter
     # noqa's around.
-    "S603",
-    "S607",
+    "subprocess-without-shell-equals-true",
+    "start-process-with-partial-path",
 ]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = [

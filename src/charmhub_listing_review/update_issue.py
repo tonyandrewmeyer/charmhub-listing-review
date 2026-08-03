@@ -32,7 +32,7 @@ import json
 import pathlib
 import random
 import re
-import subprocess  # noqa: S404
+import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import urllib.error
 import urllib.request
 from typing import TypedDict, cast
@@ -90,7 +90,7 @@ When reviewing test coverage of the charm, note that:
 * [ ] The charm has an icon (recommended).
 * [ ] [Automated releasing]({ci_release_url}) to unstable channels exists
 * [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state.
-""".strip()  # noqa: E501
+""".strip()  # ruff: ignore[line-too-long]
     ]
     description.append('\n\n')
     description.append(
@@ -104,7 +104,7 @@ A charm's documentation should focus on the charm itself. For workload-specific 
 * [ ] The charm provides contribution guidelines.
 * [ ] The charm provides a license statement.
 * [ ] The charm provides a security statement.
-""".strip(),  # noqa: E501
+""".strip(),  # ruff: ignore[line-too-long]
     )
 
     # fmt: on
@@ -237,11 +237,11 @@ def assign_review(
         reviewers_data = yaml.safe_load(f)
     reviewers = reviewers_data['reviewers']
     teams = [info['team'] for info in reviewers.values()]
-    team = random.choice(teams)  # noqa: S311
+    team = random.choice(teams)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
     # If there happen to be multiple people in a team, then randomly pick among
     # them.
     team_reviewers = [name for name, info in reviewers.items() if info['team'] == team]
-    reviewer = random.choice(team_reviewers)  # noqa: S311
+    reviewer = random.choice(team_reviewers)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
 
     if not dry_run:
         cmd = ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', reviewer[1:]]

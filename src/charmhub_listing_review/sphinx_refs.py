@@ -76,7 +76,7 @@ _SPHINX_TO_MARKDOWN: dict[str, str] = {
     '{external+juju:ref}`juju model-config <command-juju-model-config>`':
         f'[juju model-config]({_JUJU_CLI}model-config/#command-juju-model-config)',
     # ops: local references (from best-practices.txt in operator repo)
-    '[Add Python dependencies to pyproject.toml and update the lock file](#define-the-required-dependencies)':  # noqa: E501
+    '[Add Python dependencies to pyproject.toml and update the lock file](#define-the-required-dependencies)':  # ruff: ignore[line-too-long]
         f'[Add Python dependencies to pyproject.toml and update the lock file]'
         f'({_OPS_CHARM_CODE}#define-the-required-dependencies)',
     '[Use the Python provided by the base](#define-the-required-dependencies)':
