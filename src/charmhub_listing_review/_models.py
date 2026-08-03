@@ -29,7 +29,7 @@ class Verdict(enum.Enum):
     four-valued vocabulary instead.
     """
 
-    PASS = 'pass'  # noqa: S105 (a verdict, not a password)
+    PASS = 'pass'  # ruff: ignore[hardcoded-password-string] (a verdict, not a password)
     """The charm meets the requirement."""
 
     FAIL = 'fail'
