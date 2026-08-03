@@ -988,9 +988,7 @@ class TestPinWorkloadVersionsKubernetes:
         assert 'my-image' in assessment.rationale
 
     def test_no_tag_fails(self, tmp_path: pathlib.Path):
-        assessment = pin_workload_versions.assess(
-            _k8s_source(tmp_path, 'ghcr.io/forgejo/forgejo')
-        )
+        assessment = pin_workload_versions.assess(_k8s_source(tmp_path, 'ghcr.io/forgejo/forgejo'))
         assert assessment.verdict is Verdict.FAIL
 
     def test_missing_upstream_source_needs_a_human(self, tmp_path: pathlib.Path):
@@ -1043,7 +1041,7 @@ class TestPinWorkloadVersionsMachine:
                 tmp_path,
                 **{
                     'src/charm.py': (
-                        "from charms.operator_libs_linux.v0 import apt\n"
+                        'from charms.operator_libs_linux.v0 import apt\n'
                         "apt.add_package('nginx', version='1.18.0-0ubuntu1')\n"
                     )
                 },
@@ -1058,7 +1056,7 @@ class TestPinWorkloadVersionsMachine:
                 tmp_path,
                 **{
                     'src/charm.py': (
-                        "from charms.operator_libs_linux.v0 import apt\n"
+                        'from charms.operator_libs_linux.v0 import apt\n'
                         "apt.add_package('freeipmi-tools', update_cache=True)\n"
                     )
                 },
@@ -1080,10 +1078,10 @@ class TestPinWorkloadVersionsMachine:
                 tmp_path,
                 **{
                     'src/apt_helpers.py': (
-                        "from charms.operator_libs_linux.v0 import apt\n"
+                        'from charms.operator_libs_linux.v0 import apt\n'
                         'def add_pkg_with_candidate_version(pkg):\n'
                         '    version = get_candidate_version(pkg)\n'
-                        "    apt.add_package(pkg, version=version, update_cache=False)\n"
+                        '    apt.add_package(pkg, version=version, update_cache=False)\n'
                     )
                 },
             )
@@ -1091,14 +1089,16 @@ class TestPinWorkloadVersionsMachine:
         assert assessment.verdict is Verdict.NEEDS_HUMAN
 
     def test_snap_ensure_with_revision_passes(self, tmp_path: pathlib.Path):
-        """Mirrors postgresql-operator's ``snap_package.ensure(..., revision=..., channel=...)``."""
+        """Mirrors postgresql-operator's ``snap_package.ensure(..., revision=..., channel)``."""
         assessment = pin_workload_versions.assess(
             _source(
                 tmp_path,
                 **{
                     'src/charm.py': (
                         'def install(snap_package, revision, channel):\n'
-                        '    snap_package.ensure(SnapState.Latest, revision=revision, channel=channel)\n'
+                        '    snap_package.ensure(\n'
+                        '        SnapState.Latest, revision=revision, channel=channel\n'
+                        '    )\n'
                     )
                 },
             )
@@ -1106,7 +1106,7 @@ class TestPinWorkloadVersionsMachine:
         assert assessment.verdict is Verdict.PASS
 
     def test_snap_add_channel_only_fails(self, tmp_path: pathlib.Path):
-        """Mirrors hardware-observer-operator's ``snap.add(self.snap_name, channel=self.channel)``."""
+        """Mirrors hardware-observer-operator's ``snap.add(name, channel=self.channel)``."""
         assessment = pin_workload_versions.assess(
             _source(
                 tmp_path,
@@ -1121,7 +1121,7 @@ class TestPinWorkloadVersionsMachine:
         assert assessment.verdict is Verdict.FAIL
         assert 'channel' in assessment.rationale or 'do not pin' in assessment.rationale
 
-    def test_unrelated_ensure_call_is_not_mistaken_for_a_snap_install(self, tmp_path: pathlib.Path):
+    def test_unrelated_ensure_call_not_mistaken_for_snap_install(self, tmp_path: pathlib.Path):
         """A bare ``.ensure()`` with no channel/revision keyword is too generic to match."""
         assessment = pin_workload_versions.assess(
             _source(tmp_path, **{'src/charm.py': 'thing.ensure()\n'})
@@ -1149,9 +1149,7 @@ class TestPinWorkloadVersionsMachine:
             ),
         ],
     )
-    def test_cli_install_commands(
-        self, tmp_path: pathlib.Path, source: str, expected: Verdict
-    ):
+    def test_cli_install_commands(self, tmp_path: pathlib.Path, source: str, expected: Verdict):
         assessment = pin_workload_versions.assess(
             _source(tmp_path, **{'src/charm.py': f'import subprocess\n{source}\n'})
         )
@@ -1163,7 +1161,7 @@ class TestPinWorkloadVersionsMachine:
                 tmp_path,
                 **{
                     'src/charm.py': (
-                        "import subprocess\n"
+                        'import subprocess\n'
                         "subprocess.run(['curl', '-LO', 'https://example.com/foo/foo.tar.gz'])\n"
                     )
                 },
