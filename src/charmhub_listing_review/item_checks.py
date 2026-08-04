@@ -43,6 +43,14 @@ of these items have a large mechanical core and a small judgement tail. An
 item that returns ``NEEDS_HUMAN`` carries its gathered evidence with it, so
 the backend is given the same material a reviewer would read rather than the
 whole repository.
+
+A minority of items have evidence that does not live in the repository at
+all - Charmhub's own record of what has been published. Those items also set
+``gather_network``, which runs through a :class:`Fetcher` seam
+(:class:`LiveFetcher` for a real call, :class:`FixtureFetcher` for tests)
+instead of touching the network from ``gather`` itself. See PLAN.md's
+network-access design note for why this stays a narrow, optional addition
+rather than a change to every item's contract.
 """
 
 from __future__ import annotations
@@ -52,8 +60,10 @@ import dataclasses
 import json
 import pathlib
 import re
+import urllib.error
+import urllib.request
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import yaml
@@ -195,6 +205,86 @@ class Evidence:
     """
 
 
+class Fetcher(Protocol):
+    """A minimal network boundary, faked in tests the same way ``LLMSeam`` is.
+
+    Two methods, not one, even though every item in this batch only ends up
+    using ``get_json`` - matching the shape a future item reading a rendered
+    page (rather than an API) would also need, without a second Protocol.
+    """
+
+    def get_json(self, url: str) -> dict[str, Any] | None:
+        """``GET url`` and parse it as a JSON object, or ``None`` on any failure."""
+        ...
+
+    def get_text(self, url: str) -> str | None:
+        """``GET url`` as text, or ``None`` on any failure."""
+        ...
+
+
+class LiveFetcher:
+    """Real network calls. Single-shot, no retry.
+
+    Mirrors ``evaluate.py``'s own ``_fetch_url`` exactly rather than
+    inventing a second HTTP approach for the same codebase: ``urllib``, a 5s
+    timeout, every error (``URLError``, ``OSError``, ``ValueError``) caught
+    and turned into ``None`` rather than raised. A ``Fetcher`` failure must
+    never, by itself, license a ``FAIL`` - see PLAN.md's network-access
+    design note's failure-mode table.
+    """
+
+    def __init__(self, *, timeout: int = 5):
+        self._timeout = timeout
+
+    def get_text(self, url: str) -> str | None:
+        """``GET url`` as text, or ``None`` on any failure."""
+        try:
+            request = urllib.request.Request(url, method='GET')  # ruff: ignore[suspicious-url-open-usage]
+            with urllib.request.urlopen(  # ruff: ignore[suspicious-url-open-usage]
+                request, timeout=self._timeout
+            ) as response:
+                if response.status is not None and response.status >= 400:
+                    return None
+                return response.read().decode('utf-8', errors='replace')
+        except (urllib.error.URLError, OSError, ValueError):
+            return None
+
+    def get_json(self, url: str) -> dict[str, Any] | None:
+        """``GET url`` and parse it as a JSON object, or ``None`` on any failure."""
+        text = self.get_text(url)
+        if text is None:
+            return None
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+
+class FixtureFetcher:
+    """Replays canned responses instead of calling the network.
+
+    ``responses`` maps a URL to its canned payload - a ``dict`` for
+    ``get_json``, a ``str`` for ``get_text`` - matching this module's own
+    test idiom of inline literals in ``test_item_checks.py`` rather than
+    ``add-reproducer``'s file-based fixture replay, which is more machinery
+    than this module has ever needed for anything.
+    """
+
+    def __init__(self, responses: dict[str, Any] | None = None):
+        self._responses = responses or {}
+
+    def get_json(self, url: str) -> dict[str, Any] | None:
+        """Return the canned response for ``url``, if it is a ``dict``."""
+        value = self._responses.get(url)
+        return value if isinstance(value, dict) else None
+
+    def get_text(self, url: str) -> str | None:
+        """Return the canned response for ``url``, if it is a ``str``."""
+        value = self._responses.get(url)
+        return value if isinstance(value, str) else None
+
+
 @dataclasses.dataclass
 class ItemCheck:
     """A checklist item and the two halves that answer it."""
@@ -208,8 +298,21 @@ class ItemCheck:
     decide: Callable[[Evidence], ItemAssessment]
     """Rule on gathered evidence, deferring what it cannot settle."""
 
-    def assess(self, source: CharmSource) -> ItemAssessment:
+    gather_network: Callable[[CharmSource, Fetcher], Evidence] | None = None
+    """Collect evidence that needs a network call, on top of ``gather``'s.
+
+    ``None`` for every item that doesn't need one - no signature change for
+    them. Only runs when both this is set and ``assess()`` is given a
+    ``fetcher``; an item with a ``gather_network`` set degrades to exactly
+    its local-only gate when no ``fetcher`` is passed (e.g. a sandboxed or
+    offline run). See PLAN.md's network-access design note.
+    """
+
+    def assess(self, source: CharmSource, fetcher: Fetcher | None = None) -> ItemAssessment:
         """Gather evidence for this item and rule on it.
+
+        ``fetcher`` is only consulted by items with a ``gather_network`` set;
+        omitting it is the same as this item never having had one wired in.
 
         An item whose evidence names something it could not read is capped at
         ``NEEDS_HUMAN`` whatever ``decide`` concluded. A charm is not shown to
@@ -220,6 +323,13 @@ class ItemCheck:
         ones that forget it are the ones that report a confident wrong answer.
         """
         evidence = self.gather(source)
+        if self.gather_network is not None and fetcher is not None:
+            network = self.gather_network(source, fetcher)
+            evidence = Evidence(
+                lines=evidence.lines + network.lines,
+                data={**evidence.data, **network.data},
+                unread=evidence.unread + network.unread,
+            )
         assessment = self.decide(evidence)
         if not evidence.unread or assessment.verdict is Verdict.NEEDS_HUMAN:
             return assessment
@@ -2348,17 +2458,21 @@ sensitive_logging = ItemCheck(
 
 # --- charmcraft-yaml-key-resources -----------------------------------------
 
-# Deliberately thin - see PLAN.md's "Item 23" design note. The only evidence
-# that lives in the repository is whether the item applies at all: a
-# `type: file` resource declared in `charmcraft.yaml`. Whether that resource
-# actually has a revision published for every architecture the charm claims
-# to support is a fact that lives entirely on Charmhub - `gather` here only
-# ever reads `CharmSource`, so answering that needs `ItemCheck` to grow the
-# ability to make a network call, which is a real design change (shared with
-# item #2, the Charmhub-page item) to be made explicitly, once, not implied
-# by this item's implementation. Until then: NOT_APPLICABLE for no `file`
-# resource (a real, free result) and NEEDS_HUMAN otherwise, naming the
-# declared resources and the charm's claimed architectures.
+# The local-only half stays deliberately thin - see PLAN.md's "Item 23"
+# design note. The only evidence that lives in the repository is whether the
+# item applies at all: a `type: file` resource declared in `charmcraft.yaml`.
+# NOT_APPLICABLE for no `file` resource (a real, free result); NEEDS_HUMAN
+# otherwise, naming the declared resources and the charm's claimed
+# architectures.
+#
+# The network half (`gather_resource_architectures_network`, below) adds the
+# coarser charm-level architecture cross-check PLAN.md's 2026-08-02
+# network-access design note found the public Charmhub API can support - the
+# per-arch *resource-revision* data this item was originally written to want
+# sits behind Charmhub's authenticated publisher API and stays out of reach
+# with or without this. Per that note, this does not unlock a PASS/FAIL
+# branch the local-only gate doesn't already have - it only strengthens the
+# NEEDS_HUMAN rationale, naming what Charmhub confirms and what it can't.
 
 
 def _platform_architectures(charmcraft: dict[str, Any]) -> list[str]:
@@ -2395,17 +2509,126 @@ def gather_resource_architectures(source: CharmSource) -> Evidence:
     )
 
 
+_CHARMHUB_INFO_URL = (
+    'https://api.charmhub.io/v2/charms/info/{name}?fields=channel-map.revision.bases.architecture'
+)
+
+
+def _resolve_charmhub_name(source: CharmSource) -> str:
+    """The name to query Charmhub under - never the repository name.
+
+    `charmcraft.yaml`'s own `name:` first; a legacy standalone
+    `metadata.yaml`'s `name:` as a fallback for charms that have not
+    migrated the field over yet - the same gap `evaluate.py`'s
+    `metadata_links` and item 8 already have (`FOLLOWUPS-LOG.md`'s
+    2026-07-31 entry). Never the repository name: per PLAN.md's
+    network-access design note, five of this project's seven validation
+    charms have a Charmhub name that differs from their GitHub repo name, so
+    guessing from the repo would be wrong more often than not.
+    """
+    charmcraft = source.charmcraft_yaml()
+    name = charmcraft.get('name')
+    if isinstance(name, str) and name:
+        return name
+
+    metadata_path = source.charm_path / 'metadata.yaml'
+    if metadata_path.is_file():
+        try:
+            data = yaml.safe_load(metadata_path.read_text(encoding='utf-8', errors='replace'))
+        except yaml.YAMLError:
+            data = None
+        if isinstance(data, dict):
+            legacy_name = data.get('name')
+            if isinstance(legacy_name, str) and legacy_name:
+                return legacy_name
+
+    return ''
+
+
+def _published_architectures(payload: dict[str, Any]) -> list[str]:
+    """Every architecture Charmhub has published the charm itself for.
+
+    Reads `channel-map[].revision.bases[].architecture` - the charm's own
+    published bases, not its resources' (see the module comment above for
+    why the latter is out of reach on the public API).
+    """
+    channel_map = payload.get('channel-map')
+    if not isinstance(channel_map, list):
+        return []
+
+    architectures: set[str] = set()
+    for entry in channel_map:
+        if not isinstance(entry, dict):
+            continue
+        revision = entry.get('revision')
+        bases = revision.get('bases') if isinstance(revision, dict) else None
+        if not isinstance(bases, list):
+            continue
+        for base in bases:
+            if isinstance(base, dict):
+                architecture = base.get('architecture')
+                if isinstance(architecture, str) and architecture:
+                    architectures.add(architecture)
+    return sorted(architectures)
+
+
+def gather_resource_architectures_network(source: CharmSource, fetcher: Fetcher) -> Evidence:
+    """Cross-check claimed architectures against what Charmhub has published for the charm.
+
+    Skips the network call entirely when there is no `type: file` resource,
+    since `decide` returns NOT_APPLICABLE without needing it - the same
+    "gather the evidence the item names, and nothing else" discipline every
+    other item in this module already follows, now extended to not spend a
+    network call either.
+    """
+    charmcraft = source.charmcraft_yaml()
+    resources = charmcraft.get('resources')
+    resources = resources if isinstance(resources, dict) else {}
+    if not any(
+        isinstance(definition, dict) and definition.get('type') == 'file'
+        for definition in resources.values()
+    ):
+        return Evidence()
+
+    name = _resolve_charmhub_name(source)
+    if not name:
+        return Evidence(
+            lines=[
+                'could not resolve a Charmhub name to query (no `name:` in '
+                '`charmcraft.yaml` or `metadata.yaml`)'
+            ],
+            data={'charmhub_name_unresolved': True},
+        )
+
+    payload = fetcher.get_json(_CHARMHUB_INFO_URL.format(name=name))
+    if payload is None:
+        return Evidence(
+            lines=[f'Charmhub lookup for `{name}` did not return a result'],
+            data={'charmhub_lookup_failed': True},
+        )
+
+    published = _published_architectures(payload)
+    lines = [f'Charmhub has published `{name}` itself for: {arch}' for arch in published]
+    if not lines:
+        lines = [f'Charmhub returned no published architectures for `{name}`']
+    return Evidence(lines=lines, data={'published_architectures': published})
+
+
 def decide_resource_architectures(evidence: Evidence) -> ItemAssessment:
     """Rule on binary-resource architecture coverage - as far as it can be judged.
 
     Whether each declared `file` resource has a published revision for every
     claimed architecture is a Charmhub-only fact this check has no way to
-    read; see the module comment above. What is free: whether the item
-    applies at all.
+    read even with the network cross-check; see the module comment above.
+    What is free: whether the item applies at all, plus - when a `fetcher`
+    was given - the coarser charm-level published-architecture signal.
     """
     checklist_id = 'charmcraft-yaml-key-resources'
     file_resources: list[str] = evidence.data.get('file_resources', [])
     architectures: list[str] = evidence.data.get('architectures', [])
+    published: list[str] | None = evidence.data.get('published_architectures')
+    lookup_failed: bool = evidence.data.get('charmhub_lookup_failed', False)
+    name_unresolved: bool = evidence.data.get('charmhub_name_unresolved', False)
 
     if not file_resources:
         return ItemAssessment(
@@ -2415,18 +2638,50 @@ def decide_resource_architectures(evidence: Evidence) -> ItemAssessment:
         )
 
     names = ', '.join(file_resources)
+
+    charmhub_note = ''
+    if published is not None:
+        published_str = ', '.join(published) if published else 'no architectures'
+        if architectures:
+            missing = sorted(set(architectures) - set(published))
+            if missing:
+                charmhub_note = (
+                    f' Charmhub confirms the charm itself is published for {published_str}, but '
+                    f'not for {", ".join(missing)}; Charmhub does not expose which architecture '
+                    f'each resource *revision* was published for, so this is a coarser signal, '
+                    f'not a per-resource confirmation.'
+                )
+            else:
+                charmhub_note = (
+                    f' Charmhub confirms the charm itself is published for every claimed '
+                    f'architecture ({published_str}), though it does not expose which '
+                    f'architecture each resource *revision* was published for.'
+                )
+        else:
+            charmhub_note = f' Charmhub shows the charm itself published for {published_str}.'
+    elif lookup_failed:
+        charmhub_note = (
+            ' A Charmhub lookup for a charm-level architecture cross-check did not return a '
+            'result (network error, rate limit, or the charm was not found under that name).'
+        )
+    elif name_unresolved:
+        charmhub_note = (
+            ' A Charmhub cross-check could not resolve a charm name to query from '
+            '`charmcraft.yaml` or `metadata.yaml`.'
+        )
+
     if architectures:
         archs = ', '.join(architectures)
         rationale = (
             f'The charm declares {len(file_resources)} `type: file` resource(s) ({names}) and '
             f'claims to support {archs}; whether each has a published revision for every one '
-            f'of those architectures can only be checked on Charmhub.'
+            f'of those architectures can only be checked on Charmhub.' + charmhub_note
         )
     else:
         rationale = (
             f'The charm declares {len(file_resources)} `type: file` resource(s) ({names}) but '
             f'names no `platforms`, so the architectures to check on Charmhub are not stated '
-            f'here.'
+            f'here.' + charmhub_note
         )
     return ItemAssessment(
         checklist_id=checklist_id,
@@ -2440,6 +2695,7 @@ resource_architectures = ItemCheck(
     checklist_id='charmcraft-yaml-key-resources',
     gather=gather_resource_architectures,
     decide=decide_resource_architectures,
+    gather_network=gather_resource_architectures_network,
 )
 
 
@@ -2704,6 +2960,91 @@ documentation_link = ItemCheck(
 )
 
 
+# --- charmcraft-yaml-key-config ---------------------------------------------
+
+# See PLAN.md's "Item 28" design note. Thin gate, item 23's tier: the one
+# real signal this batch's real-charm data found - config options declared
+# with no `default` key - does not license a confident FAIL, since Juju
+# does not enforce a "required" option even when `default` is absent;
+# deploying with the option unset is legal, and it is the charm's own code
+# that decides whether to treat that as an error, a documented degraded
+# mode, or nothing at all. Every branch here collapses to NEEDS_HUMAN,
+# naming the option count and the no-default options as evidence for a
+# reviewer (or an eventual AI pass) to weigh - never a guessed PASS or FAIL.
+
+
+def gather_config_defaults(source: CharmSource) -> Evidence:
+    """Collect declared config options and which of them have no `default` key."""
+    charmcraft = source.charmcraft_yaml()
+    config = charmcraft.get('config')
+    options = config.get('options') if isinstance(config, dict) else None
+    options = options if isinstance(options, dict) else {}
+
+    missing_default = sorted(
+        str(name)
+        for name, definition in options.items()
+        if isinstance(definition, dict) and 'default' not in definition
+    )
+
+    lines = [f'{len(options)} config option(s) declared']
+    lines.extend(f'{name}: no `default` key' for name in missing_default)
+    return Evidence(
+        lines=lines,
+        data={'total_options': len(options), 'missing_default': missing_default},
+    )
+
+
+def decide_config_defaults(evidence: Evidence) -> ItemAssessment:
+    """Rule on config exposure - as far as it can be judged.
+
+    No options declared at all is NOT_APPLICABLE - the same "a real, free
+    result" shape item 23's no-`file`-resource branch has, and the charm is
+    already deployable with zero config, the item's own ideal. Otherwise
+    NEEDS_HUMAN: whether N options lacking a default is "best defaults" or
+    "expose only when necessary" is a design judgement about the whole
+    charm's shape (see the module comment above), not something this check
+    can settle on its own - it never returns PASS or FAIL.
+    """
+    checklist_id = 'charmcraft-yaml-key-config'
+    total_options: int = evidence.data.get('total_options', 0)
+    missing_default: list[str] = evidence.data.get('missing_default', [])
+
+    if not total_options:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm declares no config options.',
+        )
+
+    if missing_default:
+        names = ', '.join(missing_default)
+        rationale = (
+            f'The charm declares {total_options} config option(s), {len(missing_default)} of '
+            f'which have no `default` key ({names}); Juju does not enforce a "required" option '
+            f'even without a default, so whether that is a deliberate design choice or a gap '
+            f'needs a human look.'
+        )
+    else:
+        rationale = (
+            f'The charm declares {total_options} config option(s), all with a `default` key; '
+            f'whether config is exposed only when necessary, and whether zero-config deploy is '
+            f'the intended default, still needs a human look.'
+        )
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=rationale,
+        evidence=evidence.lines,
+    )
+
+
+config_defaults = ItemCheck(
+    checklist_id='charmcraft-yaml-key-config',
+    gather=gather_config_defaults,
+    decide=decide_config_defaults,
+)
+
+
 ITEM_CHECKS: dict[str, ItemCheck] = {
     check.checklist_id: check
     for check in (
@@ -2720,5 +3061,6 @@ ITEM_CHECKS: dict[str, ItemCheck] = {
         resource_architectures,
         library_status_mutation,
         documentation_link,
+        config_defaults,
     )
 }

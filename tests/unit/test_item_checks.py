@@ -23,9 +23,11 @@ from charmhub_listing_review.item_checks import (
     ITEM_CHECKS,
     CharmSource,
     Evidence,
+    FixtureFetcher,
     ItemCheck,
     automated_releasing,
     avoid_charm_plugin,
+    config_defaults,
     dependency_update_tooling,
     documentation_link,
     first_party_python_files,
@@ -1510,6 +1512,136 @@ class TestResourceArchitectures:
         assert ITEM_CHECKS['charmcraft-yaml-key-resources'] is resource_architectures
 
 
+# The exact URL `gather_resource_architectures_network` builds - not imported from
+# `item_checks` (a private constant), just matched literally, the same way these tests
+# already hardcode expected rationale text rather than importing it.
+_CHARMHUB_URL_TEMPLATE = (
+    'https://api.charmhub.io/v2/charms/info/{name}?fields=channel-map.revision.bases.architecture'
+)
+
+_CHARMCRAFT_WITH_FILE_RESOURCE = (
+    'name: my-charm\n'
+    'resources:\n'
+    '  lxd-binary:\n    type: file\n    filename: lxd\n    description: The LXD binary\n'
+    'platforms:\n  ubuntu@24.04:amd64:\n  ubuntu@24.04:arm64:\n'
+)
+
+
+class _SpyFetcher:
+    """Wraps a `Fetcher`, recording every URL it is asked for."""
+
+    def __init__(self, fetcher: FixtureFetcher):
+        self._fetcher = fetcher
+        self.requested: list[str] = []
+
+    def get_json(self, url: str):
+        self.requested.append(url)
+        return self._fetcher.get_json(url)
+
+    def get_text(self, url: str):
+        self.requested.append(url)
+        return self._fetcher.get_text(url)
+
+
+class TestResourceArchitecturesNetwork:
+    def test_no_fetcher_degrades_to_the_local_only_gate(self, tmp_path: pathlib.Path):
+        source = _source(tmp_path, **{'charmcraft.yaml': _CHARMCRAFT_WITH_FILE_RESOURCE})
+        without_fetcher = resource_architectures.assess(source)
+        with_none_fetcher = resource_architectures.assess(source, fetcher=None)
+        assert without_fetcher.rationale == with_none_fetcher.rationale
+        assert without_fetcher.verdict is Verdict.NEEDS_HUMAN
+
+    def test_skips_the_network_call_when_no_file_resource(self, tmp_path: pathlib.Path):
+        source = _source(tmp_path, **{'charmcraft.yaml': 'name: my-charm\n'})
+        fetcher = _SpyFetcher(FixtureFetcher())
+        assessment = resource_architectures.assess(source, fetcher=fetcher)
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+        assert fetcher.requested == []
+
+    def test_charmhub_confirms_every_claimed_architecture(self, tmp_path: pathlib.Path):
+        source = _source(tmp_path, **{'charmcraft.yaml': _CHARMCRAFT_WITH_FILE_RESOURCE})
+        url = _CHARMHUB_URL_TEMPLATE.format(name='my-charm')
+        fetcher = FixtureFetcher({
+            url: {
+                'channel-map': [
+                    {'revision': {'bases': [{'architecture': 'amd64'}]}},
+                    {'revision': {'bases': [{'architecture': 'arm64'}]}},
+                ]
+            }
+        })
+        assessment = resource_architectures.assess(source, fetcher=fetcher)
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'published for every claimed architecture' in assessment.rationale
+        assert 'amd64' in assessment.rationale
+        assert 'arm64' in assessment.rationale
+
+    def test_charmhub_missing_architecture_still_needs_a_human_not_fail(
+        self, tmp_path: pathlib.Path
+    ):
+        """Confirming a gap strengthens the rationale, but PLAN.md's design note is explicit
+
+        that the public API does not unlock a PASS/FAIL branch - it stays NEEDS_HUMAN.
+        """
+        source = _source(tmp_path, **{'charmcraft.yaml': _CHARMCRAFT_WITH_FILE_RESOURCE})
+        url = _CHARMHUB_URL_TEMPLATE.format(name='my-charm')
+        fetcher = FixtureFetcher({
+            url: {'channel-map': [{'revision': {'bases': [{'architecture': 'amd64'}]}}]}
+        })
+        assessment = resource_architectures.assess(source, fetcher=fetcher)
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'not for arm64' in assessment.rationale
+
+    def test_charmhub_lookup_failure_is_needs_human_not_fail(self, tmp_path: pathlib.Path):
+        source = _source(tmp_path, **{'charmcraft.yaml': _CHARMCRAFT_WITH_FILE_RESOURCE})
+        fetcher = FixtureFetcher()  # empty - every get_json() misses, same as a network error
+        assessment = resource_architectures.assess(source, fetcher=fetcher)
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'did not return a result' in assessment.rationale
+
+    def test_name_resolved_from_charmcraft_yaml_not_the_repository_name(
+        self, tmp_path: pathlib.Path
+    ):
+        """The query name must never come from `CharmSource.charm_name` (repo-derived)."""
+        source = CharmSource(
+            charm_path=_charm(tmp_path, **{'charmcraft.yaml': _CHARMCRAFT_WITH_FILE_RESOURCE}),
+            charm_name='my-charm-operator',
+        )
+        url = _CHARMHUB_URL_TEMPLATE.format(name='my-charm')
+        fetcher = FixtureFetcher({
+            url: {'channel-map': [{'revision': {'bases': [{'architecture': 'amd64'}]}}]}
+        })
+        assessment = resource_architectures.assess(source, fetcher=fetcher)
+        assert 'not for arm64' in assessment.rationale
+
+    def test_name_resolved_from_legacy_metadata_yaml_fallback(self, tmp_path: pathlib.Path):
+        """A charm that hasn't migrated `name:` into `charmcraft.yaml` yet."""
+        charmcraft = (
+            'resources:\n'
+            '  lxd-binary:\n    type: file\n    filename: lxd\n    description: The LXD binary\n'
+            'platforms:\n  ubuntu@24.04:amd64:\n'
+        )
+        source = _source(
+            tmp_path,
+            **{'charmcraft.yaml': charmcraft, 'metadata.yaml': 'name: my-legacy-charm\n'},
+        )
+        url = _CHARMHUB_URL_TEMPLATE.format(name='my-legacy-charm')
+        fetcher = FixtureFetcher({
+            url: {'channel-map': [{'revision': {'bases': [{'architecture': 'amd64'}]}}]}
+        })
+        assessment = resource_architectures.assess(source, fetcher=fetcher)
+        assert 'published for every claimed architecture' in assessment.rationale
+
+    def test_unresolvable_name_is_needs_human_not_fail(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'resources:\n'
+            '  lxd-binary:\n    type: file\n    filename: lxd\n    description: The LXD binary\n'
+        )
+        source = _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        assessment = resource_architectures.assess(source, fetcher=FixtureFetcher())
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'could not resolve a charm name' in assessment.rationale
+
+
 class TestLibraryStatusMutation:
     def test_no_own_library_is_not_applicable(self, tmp_path: pathlib.Path):
         assessment = library_status_mutation.assess(
@@ -1668,3 +1800,67 @@ class TestDocumentationLink:
 
     def test_registered_under_its_checklist_id(self):
         assert ITEM_CHECKS['charmcraft-yaml-key-documentation'] is documentation_link
+
+
+class TestConfigDefaults:
+    def test_no_config_options_is_not_applicable(self, tmp_path: pathlib.Path):
+        charmcraft = 'name: my-charm\n'
+        assessment = config_defaults.assess(_source(tmp_path, **{'charmcraft.yaml': charmcraft}))
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_empty_options_block_is_not_applicable(self, tmp_path: pathlib.Path):
+        charmcraft = 'name: my-charm\nconfig:\n  options: {}\n'
+        assessment = config_defaults.assess(_source(tmp_path, **{'charmcraft.yaml': charmcraft}))
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_options_missing_a_default_need_a_human_not_a_fail(self, tmp_path: pathlib.Path):
+        """PLAN.md's design note is explicit: Juju does not enforce a required option, so a
+
+        missing `default` is evidence for a human, never a confident FAIL.
+        """
+        charmcraft = (
+            'name: my-charm\n'
+            'config:\n'
+            '  options:\n'
+            '    log-level:\n      type: string\n      default: info\n'
+            '    admin-password:\n      type: string\n'
+        )
+        assessment = config_defaults.assess(_source(tmp_path, **{'charmcraft.yaml': charmcraft}))
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'admin-password' in assessment.rationale
+        assert 'log-level' not in assessment.rationale
+
+    def test_options_missing_a_default_are_named_in_evidence(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\nconfig:\n  options:\n    admin-password:\n      type: string\n'
+        )
+        assessment = config_defaults.assess(_source(tmp_path, **{'charmcraft.yaml': charmcraft}))
+        assert any('admin-password' in line for line in assessment.evidence)
+
+    def test_every_option_with_a_default_still_needs_a_human_not_a_pass(
+        self, tmp_path: pathlib.Path
+    ):
+        """No PASS branch exists - "best defaults" is broader than "every option has one"."""
+        charmcraft = (
+            'name: my-charm\n'
+            'config:\n'
+            '  options:\n'
+            '    log-level:\n      type: string\n      default: info\n'
+        )
+        assessment = config_defaults.assess(_source(tmp_path, **{'charmcraft.yaml': charmcraft}))
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'all with a `default` key' in assessment.rationale
+
+    def test_explicit_null_default_still_counts_as_having_a_default(self, tmp_path: pathlib.Path):
+        """`default: null` is a present key with a null value, not a missing key."""
+        charmcraft = (
+            'name: my-charm\n'
+            'config:\n'
+            '  options:\n'
+            '    optional-thing:\n      type: string\n      default: null\n'
+        )
+        assessment = config_defaults.assess(_source(tmp_path, **{'charmcraft.yaml': charmcraft}))
+        assert 'optional-thing' not in ' '.join(assessment.evidence)
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['charmcraft-yaml-key-config'] is config_defaults
