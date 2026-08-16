@@ -273,7 +273,10 @@ def metadata_links(repo_dir: pathlib.Path) -> str:
     values. A links field includes fields for documentation, issues, source,
     website, and contact, which all resolve with a 2xx status code.
     """
-    description = '* [ ] charmcraft.yaml includes required metadata.'
+    description = (
+        "* [ ] A concise summary of the charm in the `charmcraft.yaml` 'summary' field, and a "
+        "more detailed description in the `charmcraft.yaml` 'description' field."
+    )
     data = _get_charmcraft_yaml(repo_dir)
     if not data:
         return description

@@ -16,9 +16,11 @@
 
 import json
 import pathlib
+import urllib.error
 from typing import cast
 from unittest import mock
 
+import charmhub_listing_review.evaluate as evaluate
 import charmhub_listing_review.update_issue as update_issue
 
 
@@ -303,3 +305,23 @@ def test_apply_automated_checks_ticks_orphaned_checks(mock_evaluate):
     assert '* [x] The charm provides contribution guidelines.' in result
     assert '* [x] The charm provides a license statement.' in result
     assert '* [x] The charm provides a security statement.' in result
+
+
+@mock.patch('urllib.request.urlopen')
+def test_metadata_links_description_matches_comment(mock_urlopen, tmp_path):
+    """The metadata_links text must match an item in the issue comment.
+
+    apply_automated_checks ticks an item by substring matching the check's
+    result against the comment, so the two must stay identical.
+    """
+    # The best practices are fetched over the network, and are not needed here.
+    mock_urlopen.side_effect = urllib.error.URLError('no network')
+    comment = update_issue.issue_comment(
+        'my-charm',
+        'https://demo.example.com',
+        'https://release.example.com',
+        'https://integration.example.com',
+        'https://docs.example.com',
+    )
+    # With no charmcraft.yaml, the check returns its description unticked.
+    assert evaluate.metadata_links(tmp_path) in comment
