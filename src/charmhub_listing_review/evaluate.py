@@ -63,6 +63,24 @@ def _fetch_url(url: str, *, timeout: int = 5) -> str | None:
         return None
 
 
+_github_blob_url = re.compile(r'^https://github\.com/(?P<repo>[^/]+/[^/]+)/blob/(?P<path>.+)$')
+
+
+def _raw_content_url(url: str) -> str:
+    """Convert a GitHub web URL to the URL that serves the file's contents.
+
+    Fetching a ``github.com/.../blob/...`` URL returns the rendered HTML page,
+    not the file, so any check that inspects file *content* needs the
+    ``raw.githubusercontent.com`` equivalent. URLs that aren't GitHub blob
+    URLs - including the ``file://`` URLs used for local self-review - are
+    returned unchanged.
+    """
+    match = _github_blob_url.match(url)
+    if match is None:
+        return url
+    return f'https://raw.githubusercontent.com/{match["repo"]}/{match["path"]}'
+
+
 def evaluate(
     charm_name: str,
     repository_url: str,
@@ -167,7 +185,7 @@ def license_statement(license_url: str) -> str:
     clarified (which also implies an identified authorship of the charm).
     """
     description = '* [ ] The charm provides a license statement.'
-    text = _fetch_url(license_url)
+    text = _fetch_url(_raw_content_url(license_url))
     if text is None:
         return description
     # Check for known licenses, with a simple hash.
