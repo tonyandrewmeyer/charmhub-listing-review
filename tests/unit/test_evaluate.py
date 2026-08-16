@@ -20,6 +20,8 @@ from unittest import mock
 import pytest
 
 import charmhub_listing_review.evaluate as evaluate
+import charmhub_listing_review.update_issue as update_issue
+from charmhub_listing_review.sphinx_refs import convert_sphinx_refs
 
 
 class TestGetDefaultBranch:
@@ -173,13 +175,57 @@ config:
 @pytest.mark.parametrize(
     'charm_name,expected',
     [
-        ('valid-name', True),
-        ('Invalid-Name', False),
+        # Shapes the documentation gives as correct.
+        ('mega-calendar', True),
+        ('mega-calendar-k8s', True),
+        ('argo-server-k8s', True),
+        ('foo-integrator', True),
+        ('bar-configurator', True),
+        ('postgresql', True),
+        # Don't allow an `operator` or `charm` prefix/suffix.
+        ('mega-calendar-operator', False),
+        ('mega-calendar-charm', False),
+        ('operator-mega-calendar', False),
+        ('charm-mega-calendar', False),
+        # A segment that merely contains the word is fine -- only whole
+        # leading/trailing segments are reserved.
+        ('charmcraft-dashboard', True),
+        ('mega-operators', True),
+        # Character set and hyphen placement.
+        ('Mega-Calendar', False),
+        ('mega_calendar', False),
+        ('mega--calendar', False),
+        ('-mega-calendar', False),
+        ('mega-calendar-', False),
+        ('', False),
+        # ASCII specifically: `islower()` and `isalnum()` both accept these,
+        # which is why the check does not use them.
+        ('mega-café', False),
+        # Written as an escape: ruff rejects the literal as an ambiguous
+        # character, which is rather the point of the case.
+        ('mega-calendar\u0661', False),  # ARABIC-INDIC DIGIT ONE
     ],
 )
 def test_check_charm_name(charm_name, expected):
     result = evaluate.check_charm_name(charm_name)
     assert (result.startswith('* [x]')) == expected
+
+
+def test_check_charm_name_text_matches_the_checklist_item():
+    """Check that `check_charm_name`'s text appears verbatim in `issue_comment`.
+
+    This is important because `apply_automated_checks` ticks requirements by
+    matching the unticked text then swapping in the ticked text.
+    """
+    unticked = evaluate.check_charm_name('Not-A-Valid-Name')
+    comment = update_issue.issue_comment(
+        name='mega-calendar',
+        demo_url='https://example.com/demo',
+        documentation_link='https://example.com/docs',
+        ci_release_url='https://example.com/release',
+        ci_integration_url='https://example.com/integration',
+    )
+    assert convert_sphinx_refs(unticked) in comment
 
 
 @mock.patch('charmhub_listing_review.evaluate._url_ok')

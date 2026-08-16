@@ -321,28 +321,53 @@ def _validate_action_or_config_name(name: str) -> bool:
     return True
 
 
-def check_charm_name(charm_name: str) -> str:
-    """The charm's name is aligns with best practices.
+_RESERVED_NAME_SEGMENTS = frozenset({'charm', 'operator'})
+_CHARM_NAME_CHARACTERS = frozenset('abcdefghijklmnopqrstuvwxyz0123456789-')
 
-    The charm's name is lowercase alphanumeric, with hyphens (-) to separate
-    words. The charm name is not the same as the repository name.
+
+def _validate_charm_name(name: str) -> bool:
+    """Whether ``name`` satisfies the mechanically checkable naming rules.
+
+    Covers only the rules that can be decided from the name alone: the
+    character set, hyphen placement, and the banned ``charm``/``operator``
+    prefix and suffix. The remaining documented rules -- that the name carries
+    no organisation or publisher, and that ``-k8s`` is used only where a
+    machine variant exists or could exist -- need knowledge this function does
+    not have, and are left to the reviewer.
     """
-    # This has to match the description in the Charmcraft documentation.
+    if not name:
+        return False
+    # Not `islower()`/`isalnum()`: those accept non-ASCII letters and digits,
+    # and the documented rule is ASCII lowercase specifically.
+    if not set(name) <= _CHARM_NAME_CHARACTERS:
+        return False
+    if '--' in name or name.startswith('-') or name.endswith('-'):
+        return False
+    segments = name.split('-')
+    return not (segments[0] in _RESERVED_NAME_SEGMENTS or segments[-1] in _RESERVED_NAME_SEGMENTS)
+
+
+def check_charm_name(charm_name: str) -> str:
+    """The charm's name aligns with the documented naming convention.
+
+    Source of truth is "Decide your charm's name" in the ops how-to guide:
+    ASCII lowercase letters, numbers and hyphens, following the pattern
+    ``<workload name>[-<function>][-k8s]``, with no organisation or publisher
+    name and no ``operator``/``charm`` prefix or suffix.
+    """
+    # This must match the corresponding bullet in update_issue.issue_comment
+    # exactly, or apply_automated_checks cannot tick it.
     description = re.sub(
         r'\s+',
         ' ',
         """
-    * [ ] The charm name should be slug-oriented (ASCII lowercase letters, numbers, and hyphens)
-    and follow the pattern ``<workload name in full>[<function>][-k8s]``. For example,
-    ``argo-server-k8s``. Include the ``-k8s`` suffix on all charms that run on a Kubernetes cloud,
-    unless the charm has no workload or you know that there will never be a machine version of the
-    charm. Don't include an organization or publisher in the name. Don't add an ``operator`` or
-    ``charm`` prefix or suffix. For naming a repository, see
-    {external+charmcraft:ref}`initialise-a-charm`.
-    See {external+charmcraft:ref}`name <charmcraft-yaml-key-name>`.
+    * [ ] The charm's name follows the pattern `<workload name>[-<function>][-k8s]` and contains
+    only ASCII lowercase letters, numbers, and hyphens. It doesn't include `operator` or `charm`
+    as a prefix or suffix, or an organisation or publisher name. See
+    [Decide your charm's name](https://canonical.com/juju/docs/ops/latest/howto/initialise-your-project/#decide-your-charm-s-name).
     """,
     ).strip()
-    if _validate_action_or_config_name(charm_name):
+    if _validate_charm_name(charm_name):
         return description.replace('* [ ]', '* [x]')
     return description
 
