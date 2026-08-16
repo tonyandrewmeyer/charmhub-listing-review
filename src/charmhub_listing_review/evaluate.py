@@ -400,7 +400,7 @@ def repository_name(repository_url: str, charm_name: str) -> str:
       operate a workload (as in the case of integrator charms and configurator charms), the
       `-operator` suffix isn't needed. For example, `foo-integrator` and `bar-configurator`.
       Repositories that contain multiple charms or one or more charms and other artefacts
-      (like Rocks) will need to use other naming patterns.
+      (like rocks) will need to use other naming patterns.
       See [Create a repository](#create-a-repository).
     """,
     ).strip()
