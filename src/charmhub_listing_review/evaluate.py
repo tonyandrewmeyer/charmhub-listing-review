@@ -132,7 +132,6 @@ def evaluate(
         results.append(repository_name(repository_url, charm_name))
         results.append(relations_includes_optional(charm_path))
         results.append(charmcraft_tooling(charm_path))
-        results.append(charm_plugin_strict_dependencies(charm_path))
         results.append(python_requires_version(charm_path))
         results.append(repo_has_lock_file(charm_path))
         results.append(charm_has_icon(charm_path))
@@ -524,32 +523,6 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> str:
 
     if all(command in found_commands for command in commands):
         return description.replace('* [ ]', '* [x]')
-    return description
-
-
-def charm_plugin_strict_dependencies(repo_dir: pathlib.Path) -> str:
-    """The charm plugin is configured with strict dependencies.
-
-    When using the `charm` plugin with charmcraft, ensure that you set strict
-    dependencies to true.
-
-    The repository contains a `charmcraft.yaml` file that includes building the
-    charm. If the charm uses the `charm` plugin, it should have a
-    `strict-dependencies: true` field.
-    """
-    # TODO: This has quadruple quotes in the doc, to handle an embedded example.
-    # Ideally, we can rework the docs to avoid that, rather than trying to
-    # handle it here. There's another case too, that isn't automated (log
-    # construction).
-    # This has to match the description in the Charmcraft documentation.
-    description = re.sub(
-        r'\s+',
-        ' ',
-        """
-    * [ ] When using the `charm` plugin with charmcraft, ensure that you set strict dependencies to
-    true. For example:
-    """,
-    ).strip()
     return description
 
 
