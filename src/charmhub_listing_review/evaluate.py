@@ -142,16 +142,21 @@ def evaluate(
 
 
 def coding_conventions(linting_url: str) -> str:
-    """Checks for coding conventions are reasonable and implemented in CI.
+    """The charm's quality assurance pipeline is automated using a CI system.
 
     The source code of the charm is accessible in the sense of approachability.
     Consistent source code style and formatting are also considered a sign of
     being committed to quality.
     """
-    # We'll work on automating this in the future. Before we do that, we'll want
-    # to figure out how much consistency there is in CI across charms, and if we
-    # should encourage more.
-    return '* [ ] The charm implements coding conventions in CI.'
+    description = (
+        '* [ ] The quality assurance pipeline of a charm should be automated '
+        'using a continuous integration (CI) system.'
+    )
+    # Ideally, this would also check that the CI actually runs linting, but that
+    # is more difficult to automate.
+    if _url_ok(linting_url):
+        return description.replace('* [ ]', '* [x]')
+    return description
 
 
 def contribution_guidelines(contribution_url: str) -> str:

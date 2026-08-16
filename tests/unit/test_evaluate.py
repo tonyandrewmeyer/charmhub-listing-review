@@ -190,6 +190,18 @@ def test_contribution_guidelines(mock_url_ok, status, expected):
     assert (result.startswith('* [x]')) == expected
 
 
+@mock.patch('charmhub_listing_review.evaluate._url_ok')
+@pytest.mark.parametrize('status,expected', [(True, True), (False, False)])
+def test_coding_conventions(mock_url_ok, status, expected):
+    mock_url_ok.return_value = status
+    result = evaluate.coding_conventions('url')
+    assert (result.startswith('* [x]')) == expected
+    assert result.replace('* [x]', '* [ ]') == (
+        '* [ ] The quality assurance pipeline of a charm should be automated '
+        'using a continuous integration (CI) system.'
+    )
+
+
 @mock.patch('charmhub_listing_review.evaluate._fetch_url')
 @pytest.mark.parametrize('license_hash', sorted(evaluate._known_licenses))
 def test_license_statement_known_license(mock_fetch, license_hash):
