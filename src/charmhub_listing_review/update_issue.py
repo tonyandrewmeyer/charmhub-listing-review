@@ -87,6 +87,7 @@ When reviewing test coverage of the charm, note that:
 
 * [ ] The charm does what it is meant to do, per the [demo or tutorial]({demo_url}). <!-- id: charm-demo -->
 * [ ] The [charm's page on Charmhub](https://charmhub.io/{name}) provides a quality impression. The overall appearance looks good and the [documentation]({documentation_link}) looks reasonable. <!-- id: charmhub-quality-impression -->
+* [ ] The charm's name follows the pattern `<workload name>[-<function>][-k8s]` and contains only ASCII lowercase letters, numbers, and hyphens. It doesn't include `operator` or `charm` as a prefix or suffix, or an organisation or publisher name. See [Decide your charm's name](https://canonical.com/juju/docs/ops/latest/howto/initialise-your-project/#decide-your-charm-s-name). <!-- id: charm-name -->
 * [ ] The charm has an icon (recommended). <!-- id: charm-has-icon -->
 * [ ] [Automated releasing]({ci_release_url}) to unstable channels exists <!-- id: ci-automated-releasing -->
 * [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`. <!-- id: ci-integration-tests -->
@@ -99,7 +100,9 @@ When reviewing test coverage of the charm, note that:
 
 A charm's documentation should focus on the charm itself. For workload-specific or Juju-related content, link to the appropriate upstream documentation. A smaller charm can have single-page documentation for its description. A bigger charm should include a full Diátaxis navigation tree. Check that the charm has documentation that covers:
 * [ ] How to use the charm, including configuration, limitations, and deviations in behaviour from the “non-charmed” version of the application. <!-- id: doc-how-to-use -->
-* [ ] How to modify the charm <!-- id: doc-how-to-modify -->
+* [ ] How to work with the charm's supported relations, including optional ones. For example, how to integrate with a charm that provides a required database, or how to integrate with a charm that provides optional observability. <!-- id: doc-relations -->
+* [ ] Where to find developer documentation, for authors who are creating a charm that would integrate with this one. <!-- id: doc-developer-docs -->
+* [ ] How to contribute to the development of the charm. For example, how to set up a development environment, build the charm, run its tests, and propose changes. <!-- id: doc-how-to-contribute -->
 * [ ] A concise summary of the charm in the `charmcraft.yaml` 'summary' field, and a more detailed description in the `charmcraft.yaml` 'description' field. <!-- id: charmcraft-summary-description -->
 * [ ] The charm provides contribution guidelines. <!-- id: doc-contribution-guidelines -->
 * [ ] The charm provides a license statement. <!-- id: doc-license-statement -->

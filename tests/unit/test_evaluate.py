@@ -20,6 +20,8 @@ from unittest import mock
 import pytest
 
 import charmhub_listing_review.evaluate as evaluate
+import charmhub_listing_review.update_issue as update_issue
+from charmhub_listing_review.sphinx_refs import convert_sphinx_refs
 
 
 class TestGetDefaultBranch:
@@ -171,15 +173,58 @@ config:
 @pytest.mark.parametrize(
     'charm_name,expected',
     [
-        ('valid-name', True),
-        ('Invalid-Name', False),
+        # Shapes the documentation gives as correct.
+        ('mega-calendar', True),
+        ('mega-calendar-k8s', True),
+        ('argo-server-k8s', True),
+        ('foo-integrator', True),
+        ('bar-configurator', True),
+        ('postgresql', True),
+        # Don't allow an `operator` or `charm` prefix/suffix.
+        ('mega-calendar-operator', False),
+        ('mega-calendar-charm', False),
+        ('operator-mega-calendar', False),
+        ('charm-mega-calendar', False),
+        # A segment that merely contains the word is fine -- only whole
+        # leading/trailing segments are reserved.
+        ('charmcraft-dashboard', True),
+        ('mega-operators', True),
+        # Character set and hyphen placement.
+        ('Mega-Calendar', False),
+        ('mega_calendar', False),
+        ('mega--calendar', False),
+        ('-mega-calendar', False),
+        ('mega-calendar-', False),
+        ('', False),
+        # ASCII specifically: `islower()` and `isalnum()` both accept these,
+        # which is why the check does not use them.
+        ('mega-café', False),
+        # Written as an escape: ruff rejects the literal as an ambiguous
+        # character, which is rather the point of the case.
+        ('mega-calendar\u0661', False),  # ARABIC-INDIC DIGIT ONE
     ],
 )
 def test_check_charm_name(charm_name, expected):
     result = evaluate.check_charm_name(charm_name)
     assert result.passed == expected
-    # Awaiting the canonical/charmcraft `:name:` PR before this maps to an ID.
-    assert result.checklist_id is None
+    assert result.checklist_id == 'charm-name'
+
+
+def test_check_charm_name_text_matches_the_checklist_item():
+    """Check that `check_charm_name`'s text appears verbatim in `issue_comment`.
+
+    This is important because `apply_automated_checks` ticks requirements by
+    matching the unticked text then swapping in the ticked text.
+    """
+    unticked = evaluate.check_charm_name('Not-A-Valid-Name')
+    comment = update_issue.issue_comment(
+        name='mega-calendar',
+        demo_url='https://example.com/demo',
+        documentation_link='https://example.com/docs',
+        ci_release_url='https://example.com/release',
+        ci_integration_url='https://example.com/integration',
+    )
+    assert convert_sphinx_refs(unticked.description) in comment
 
 
 @mock.patch('charmhub_listing_review.evaluate._url_ok')
@@ -188,6 +233,19 @@ def test_contribution_guidelines(mock_url_ok, status, expected):
     mock_url_ok.return_value = status
     result = evaluate.contribution_guidelines('url')
     assert result.passed == expected
+
+
+@mock.patch('charmhub_listing_review.evaluate._url_ok')
+@pytest.mark.parametrize('status,expected', [(True, True), (False, False)])
+def test_coding_conventions(mock_url_ok, status, expected):
+    mock_url_ok.return_value = status
+    result = evaluate.coding_conventions('url')
+    assert result.passed == expected
+    assert result.checklist_id == 'best-practice-automated-ci'
+    assert result.description.replace('* [x]', '* [ ]') == (
+        '* [ ] The quality assurance pipeline of a charm should be automated '
+        'using a continuous integration (CI) system.'
+    )
 
 
 @mock.patch('charmhub_listing_review.evaluate._fetch_url')
@@ -209,6 +267,43 @@ def test_license_statement_fails(mock_fetch):
     mock_fetch.return_value = 'Some Unknown License'
     result = evaluate.license_statement('url')
     assert result.passed is False
+
+
+@mock.patch('charmhub_listing_review.evaluate._fetch_url')
+def test_license_statement_fetches_raw_content(mock_fetch):
+    """The GitHub web page for a file is HTML, so the license must be fetched raw."""
+    mock_fetch.return_value = None
+    evaluate.license_statement('https://github.com/canonical/my-charm/blob/main/LICENSE')
+    mock_fetch.assert_called_once_with(
+        'https://raw.githubusercontent.com/canonical/my-charm/main/LICENSE'
+    )
+
+
+@pytest.mark.parametrize(
+    'url,expected',
+    [
+        (
+            'https://github.com/canonical/my-charm/blob/main/LICENSE',
+            'https://raw.githubusercontent.com/canonical/my-charm/main/LICENSE',
+        ),
+        (
+            'https://github.com/canonical/my-charm/blob/26.04/charms/my-charm/LICENSE',
+            'https://raw.githubusercontent.com/canonical/my-charm/26.04/charms/my-charm/LICENSE',
+        ),
+        # Not a GitHub blob URL: left alone.
+        ('file:///home/charmer/my-charm/LICENSE', 'file:///home/charmer/my-charm/LICENSE'),
+        (
+            'https://raw.githubusercontent.com/canonical/my-charm/main/LICENSE',
+            'https://raw.githubusercontent.com/canonical/my-charm/main/LICENSE',
+        ),
+        (
+            'https://git.launchpad.net/my-charm/plain/LICENSE',
+            'https://git.launchpad.net/my-charm/plain/LICENSE',
+        ),
+    ],
+)
+def test_raw_content_url(url, expected):
+    assert evaluate._raw_content_url(url) == expected
 
 
 @mock.patch('charmhub_listing_review.evaluate._url_ok')
