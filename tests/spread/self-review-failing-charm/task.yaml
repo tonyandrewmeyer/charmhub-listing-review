@@ -25,15 +25,13 @@ execute: |
   # it should stay as a manual-review item (❓).
   echo "$output" | MATCH "❓.*icon"
 
-  # Lock file and requires-python are "Best practices" items, fetched live
-  # from canonical/operator's best-practices.txt and rendered with no
-  # <!-- id: ... --> marker of their own, so the ID-based matcher can't tick
-  # them either way yet. That needs canonical/operator#2524 (stable :name:
-  # anchors on the admonitions) plus a follow-up here to parse those anchors
-  # out of the fetched text. Until then they always stay manual review (❓),
-  # for a failing charm same as a passing one.
-  echo "$output" | MATCH "❓.*lock file" || echo "$output" | MATCH "❓.*committed to version control"
-  echo "$output" | MATCH "❓.*requires-python"
+  # Lock file and requires-python are "Best practices" items fetched live from
+  # canonical/operator's best-practices.txt. They used to stay at manual review
+  # because the fetched text carried no id the matcher could key off; the :name:
+  # anchors from canonical/operator#2524 landed 2026-08-16 and this branch parses
+  # them, so both now resolve for real. This fixture has neither, so both fail.
+  echo "$output" | MATCH "❌.*lock file" || echo "$output" | MATCH "❌.*committed to version control"
+  echo "$output" | MATCH "❌.*requires-python"
 
 restore: |
   rm -rf "${CHARM_DIR:-}" 2>/dev/null || true

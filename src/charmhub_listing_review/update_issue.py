@@ -119,8 +119,10 @@ A charm's documentation should focus on the charm itself. For workload-specific 
     else:
         best_practices_content = convert_sphinx_refs(best_practices_content)
         best_practices = best_practices_content.splitlines()
-    # Remove the headings and empty lines.
-    best_practices = [line for line in best_practices if line.startswith('-')]
+    # Remove the headings, empty lines, and the generated file's leading HTML
+    # comment block, whose closing `-->` is otherwise indistinguishable from a
+    # bullet if only the leading `-` is tested for.
+    best_practices = [line for line in best_practices if line.startswith('- ')]
     if best_practices:
         description.append('\n\n')
         description.append(

@@ -650,3 +650,24 @@ def test_relations_includes_optional(tmp_path, yaml_content, expected_checked):
     assert result.passed == expected_checked
     # Awaiting the canonical/charmcraft `:name:` PR before this maps to an ID.
     assert result.checklist_id is None
+
+
+def test_charmcraft_tooling_runs_the_commands_in_the_charm(tmp_path):
+    """The profile commands run in the charm's directory, not the cwd.
+
+    Without an explicit cwd the tooling commands ran wherever the reviewer
+    happened to be, so a well-formed charm failed the check for reasons that
+    had nothing to do with the charm.
+    """
+    (tmp_path / 'tox.ini').write_text(
+        '[testenv:format]\ncommands = true\n'
+        '[testenv:lint]\ncommands = true\n'
+        '[testenv:unit]\ncommands = true\n'
+        '[testenv:integration]\ncommands = true\n'
+    )
+    with mock.patch('subprocess.check_output') as check_output:
+        result = evaluate.charmcraft_tooling(tmp_path)
+    assert result.passed
+    assert check_output.call_args_list
+    for call in check_output.call_args_list:
+        assert call.kwargs['cwd'] == tmp_path
