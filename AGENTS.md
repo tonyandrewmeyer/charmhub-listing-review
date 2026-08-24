@@ -12,20 +12,26 @@ This repository manages the public listing review process for charms on [Charmhu
 ## Common Commands
 
 ```bash
-# Run all checks (lint + unit tests)
-tox
+# Display help
+make
 
-# Run linting and type checks only
-tox -e lint
+# Run linting and unit tests
+make all
 
-# Run unit tests with coverage
-tox -e unit
+# Perform linting, spell checking, and static type checks
+make lint
+
+# Run unit tests
+make unit
 
 # Run a single test
-tox -e unit -- tests/unit/test_evaluate.py::test_check_charm_name
+make unit ARGS='tests/unit/test_evaluate.py::test_check_charm_name'
 
-# Auto-format code
-tox -e format
+# Format the Python code
+make format
+
+# Auto-fix linting and formatting issues
+make fix
 
 # Install pre-commit hooks
 pre-commit install

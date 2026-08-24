@@ -21,8 +21,9 @@ execute: |
   echo "$output" | MATCH "0 passed"
   echo "$output" | MATCH "[0-9]+ failed"
 
-  # Icon should fail (no icon.svg).
-  echo "$output" | MATCH "❌.*icon"
+  # Icon is a soft requirement: a missing icon should not be a hard failure,
+  # it should stay as a manual-review item (❓).
+  echo "$output" | MATCH "❓.*icon"
 
   # Lock file should fail.
   echo "$output" | MATCH "❌.*lock file" || echo "$output" | MATCH "❌.*committed to version control"

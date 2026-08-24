@@ -7,7 +7,7 @@ execute: |
 
   # Create a passing test charm fixture.
   CHARM_DIR=$(mktemp -d)
-  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing-make
 
   # Prepare the mock issue body (mimics the GitHub issue template output).
   export MOCK_GH_ISSUE_BODY=$(sed "s|__CHARM_DIR__|$CHARM_DIR|g" issue-body.md)

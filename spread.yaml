@@ -73,7 +73,6 @@ suites:
 exclude:
   - .git
   - .github
-  - .tox
   - .ruff_cache
 
 path: /root/proj
@@ -87,9 +86,12 @@ prepare: |
 
   sudo snap install astral-uv --classic
 
+  # Needed to exercise the `charmcraft_tooling` check against a tox-based charm.
+  uv tool install tox
+
   pushd "$SPREAD_PATH"
   uv venv
-  uv pip install -e . openai tox tox-uv
+  uv pip install -e . openai
 
 restore: |
   rm -rf "$SPREAD_PATH/.venv"

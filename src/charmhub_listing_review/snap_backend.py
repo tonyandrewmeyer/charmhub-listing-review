@@ -72,7 +72,7 @@ class SnapBackend:
     def unavailability_reason(self) -> str | None:
         """Return a human-readable reason why this backend is unavailable, or None if available."""
         try:
-            import openai  # noqa: F401  # ty: ignore[unresolved-import]
+            import openai  # ruff: ignore[unused-import]  # ty: ignore[unresolved-import]
         except ImportError:
             return "the 'openai' package is not installed (run: uv sync --group snap-ai)"
         if self._discover_endpoint() is None:
@@ -142,10 +142,10 @@ class SnapBackend:
     def _probe(url: str) -> bool:
         """Check if the given URL responds to a GET /models request."""
         try:
-            req = urllib.request.Request(  # noqa: S310
+            req = urllib.request.Request(  # ruff: ignore[suspicious-url-open-usage]
                 f'{url}/models', method='GET'
             )
-            with urllib.request.urlopen(req, timeout=2) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=2) as resp:  # ruff: ignore[suspicious-url-open-usage]
                 return resp.status == 200
         except (urllib.error.URLError, OSError, TimeoutError, ValueError, OverflowError):
             return False
@@ -158,6 +158,6 @@ class SnapBackend:
             models = await self._client.models.list()
             if models.data:
                 return models.data[0].id
-        except Exception:  # noqa: S110
+        except Exception:  # ruff: ignore[try-except-pass]
             pass
         return ''

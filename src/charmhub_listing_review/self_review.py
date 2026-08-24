@@ -3,7 +3,6 @@
 # /// script
 # dependencies = [
 #   "pyyaml",
-#   "requests"
 # ]
 # ///
 
@@ -138,12 +137,12 @@ def print_self_review_results(
     ### Basic Requirements
 * [ ] The charm does what it is meant to do, demonstrated in a demo or by following a tutorial.
 * [ ] The charm's page on Charmhub provides a quality impression. The overall appearance looks good and the documentation looks reasonable.
-* [ ] The charm has an icon.
+* [ ] The charm has an icon (recommended).
 * [ ] Automated releasing to unstable channels exists
-* [ ] Integration tests exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`.
+* [ ] Integration tests exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state.
 
     ### Documentation
-    """.strip()  # noqa: E501
+    """.strip()  # ruff: ignore[line-too-long]
     comment = (
         fixed_checks + '\n\n' + comment.split('### Documentation', 1)[1].split('</details>', 1)[0]
     )
@@ -156,12 +155,19 @@ def print_self_review_results(
     doc_context: dict = {}
 
     if project_repo:
-        # Like update-issue, this assumes it's GitHub for now.
         with _spinner('Detecting default branch...'):
             default_branch = branch or get_default_branch(project_repo, unauthenticated_first=True)
-        contribution_url = f'{project_repo}/blob/{default_branch}/CONTRIBUTING.md'
-        license_url = f'{project_repo}/blob/{default_branch}/LICENSE'
-        security_url = f'{project_repo}/blob/{default_branch}/SECURITY.md'
+        if project_repo.startswith('file://'):
+            charm_subdir = '' if charm_dir in ('', '.') else f'/{charm_dir.strip("/")}'
+            base = f'{project_repo.rstrip("/")}{charm_subdir}'
+            contribution_url = f'{base}/CONTRIBUTING.md'
+            license_url = f'{base}/LICENSE'
+            security_url = f'{base}/SECURITY.md'
+        else:
+            # Like update-issue, this assumes it's GitHub for now.
+            contribution_url = f'{project_repo}/blob/{default_branch}/CONTRIBUTING.md'
+            license_url = f'{project_repo}/blob/{default_branch}/LICENSE'
+            security_url = f'{project_repo}/blob/{default_branch}/SECURITY.md'
 
         try:
             with _spinner('Cloning repository and running automated checks...'):
@@ -189,7 +195,9 @@ def print_self_review_results(
                 if unchecked_version in comment:
                     if result.passed:
                         comment = comment.replace(unchecked_version, description)
-                    elif result.passed is False:
+                    elif result.passed is False and '(recommended)' not in unchecked_version:
+                        # A recommendation that isn't met is not a failure, so it is
+                        # left as '* [ ]' rather than being marked '* [o]'.
                         failed_version = unchecked_version.replace('* [ ]', '* [o]')
                         comment = comment.replace(unchecked_version, failed_version)
                     # passed is None means indeterminate, leave as '* [ ]' (unknown)

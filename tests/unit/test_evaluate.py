@@ -14,12 +14,14 @@
 
 """Test the automated criteria evaluation."""
 
-import subprocess  # noqa: S404
+import subprocess  # ruff: ignore[suspicious-subprocess-import]
 from unittest import mock
 
 import pytest
 
 import charmhub_listing_review.evaluate as evaluate
+import charmhub_listing_review.update_issue as update_issue
+from charmhub_listing_review.sphinx_refs import convert_sphinx_refs
 
 
 class TestGetDefaultBranch:
@@ -213,8 +215,35 @@ config:
 @pytest.mark.parametrize(
     'charm_name,expected',
     [
-        ('valid-name', True),
-        ('Invalid-Name', False),
+        # Shapes the documentation gives as correct.
+        ('mega-calendar', True),
+        ('mega-calendar-k8s', True),
+        ('argo-server-k8s', True),
+        ('foo-integrator', True),
+        ('bar-configurator', True),
+        ('postgresql', True),
+        # Don't allow an `operator` or `charm` prefix/suffix.
+        ('mega-calendar-operator', False),
+        ('mega-calendar-charm', False),
+        ('operator-mega-calendar', False),
+        ('charm-mega-calendar', False),
+        # A segment that merely contains the word is fine -- only whole
+        # leading/trailing segments are reserved.
+        ('charmcraft-dashboard', True),
+        ('mega-operators', True),
+        # Character set and hyphen placement.
+        ('Mega-Calendar', False),
+        ('mega_calendar', False),
+        ('mega--calendar', False),
+        ('-mega-calendar', False),
+        ('mega-calendar-', False),
+        ('', False),
+        # ASCII specifically: `islower()` and `isalnum()` both accept these,
+        # which is why the check does not use them.
+        ('mega-café', False),
+        # Written as an escape: ruff rejects the literal as an ambiguous
+        # character, which is rather the point of the case.
+        ('mega-calendar\u0661', False),  # ARABIC-INDIC DIGIT ONE
     ],
 )
 def test_check_charm_name(charm_name, expected):
@@ -222,51 +251,105 @@ def test_check_charm_name(charm_name, expected):
     assert result.passed == expected
 
 
-@mock.patch('requests.head')
+def test_check_charm_name_text_matches_the_checklist_item():
+    """Check that `check_charm_name`'s text appears verbatim in `issue_comment`.
+
+    This is important because `apply_automated_checks` ticks requirements by
+    matching the unticked text then swapping in the ticked text.
+    """
+    unticked = evaluate.check_charm_name('Not-A-Valid-Name')
+    comment = update_issue.issue_comment(
+        name='mega-calendar',
+        demo_url='https://example.com/demo',
+        documentation_link='https://example.com/docs',
+        ci_release_url='https://example.com/release',
+        ci_integration_url='https://example.com/integration',
+    )
+    assert convert_sphinx_refs(unticked.description) in comment
+
+
+@mock.patch('charmhub_listing_review.evaluate._url_ok')
 @pytest.mark.parametrize('status,expected', [(True, True), (False, False)])
-def test_contribution_guidelines(mock_head, status, expected):
-    mock_head.return_value.ok = status
+def test_contribution_guidelines(mock_url_ok, status, expected):
+    mock_url_ok.return_value = status
     result = evaluate.contribution_guidelines('url')
     assert result.passed == expected
 
 
-@mock.patch('requests.get')
-@pytest.mark.parametrize('license_hash', evaluate._known_licenses)
-def test_license_statement_known_license(mock_get, license_hash):
-    class Response:
-        ok = True
-        status_code = 200
-        text = 'Some License Version x.0, January 1979'
+@mock.patch('charmhub_listing_review.evaluate._url_ok')
+@pytest.mark.parametrize('status,expected', [(True, True), (False, False)])
+def test_coding_conventions(mock_url_ok, status, expected):
+    mock_url_ok.return_value = status
+    result = evaluate.coding_conventions('url')
+    assert result.passed == expected
+    assert result.description.replace('* [x]', '* [ ]') == (
+        '* [ ] The quality assurance pipeline of a charm should be automated '
+        'using a continuous integration (CI) system.'
+    )
 
-    mock_get.return_value = Response()
+
+@mock.patch('charmhub_listing_review.evaluate._fetch_url')
+@pytest.mark.parametrize('license_hash', sorted(evaluate._known_licenses))
+def test_license_statement_known_license(mock_fetch, license_hash):
+    mock_fetch.return_value = 'Some License Version x.0, January 1979'
     with mock.patch('hashlib.sha512') as mock_hash:
         mock_hash.return_value.hexdigest.return_value = license_hash
         result = evaluate.license_statement('url')
         assert result.passed is True
 
 
-@mock.patch('requests.get')
-def test_license_statement_fails(mock_get):
-    mock_get.return_value.ok = False
-    mock_get.return_value.status_code = 404
+@mock.patch('charmhub_listing_review.evaluate._fetch_url')
+def test_license_statement_fails(mock_fetch):
+    mock_fetch.return_value = None
     result = evaluate.license_statement('url')
     assert result.passed is False
 
-    class Response:
-        ok = True
-        status_code = 200
-        text = 'Some Unknown License'
-
-    mock_get.return_value = Response()
-    mock_get.return_value.ok = True
+    mock_fetch.return_value = 'Some Unknown License'
     result = evaluate.license_statement('url')
     assert result.passed is False
 
 
-@mock.patch('requests.head')
+@mock.patch('charmhub_listing_review.evaluate._fetch_url')
+def test_license_statement_fetches_raw_content(mock_fetch):
+    """The GitHub web page for a file is HTML, so the license must be fetched raw."""
+    mock_fetch.return_value = None
+    evaluate.license_statement('https://github.com/canonical/my-charm/blob/main/LICENSE')
+    mock_fetch.assert_called_once_with(
+        'https://raw.githubusercontent.com/canonical/my-charm/main/LICENSE'
+    )
+
+
+@pytest.mark.parametrize(
+    'url,expected',
+    [
+        (
+            'https://github.com/canonical/my-charm/blob/main/LICENSE',
+            'https://raw.githubusercontent.com/canonical/my-charm/main/LICENSE',
+        ),
+        (
+            'https://github.com/canonical/my-charm/blob/26.04/charms/my-charm/LICENSE',
+            'https://raw.githubusercontent.com/canonical/my-charm/26.04/charms/my-charm/LICENSE',
+        ),
+        # Not a GitHub blob URL: left alone.
+        ('file:///home/charmer/my-charm/LICENSE', 'file:///home/charmer/my-charm/LICENSE'),
+        (
+            'https://raw.githubusercontent.com/canonical/my-charm/main/LICENSE',
+            'https://raw.githubusercontent.com/canonical/my-charm/main/LICENSE',
+        ),
+        (
+            'https://git.launchpad.net/my-charm/plain/LICENSE',
+            'https://git.launchpad.net/my-charm/plain/LICENSE',
+        ),
+    ],
+)
+def test_raw_content_url(url, expected):
+    assert evaluate._raw_content_url(url) == expected
+
+
+@mock.patch('charmhub_listing_review.evaluate._url_ok')
 @pytest.mark.parametrize('status,expected', [(True, True), (False, False)])
-def test_security_doc(mock_head, status, expected):
-    mock_head.return_value.ok = status
+def test_security_doc(mock_url_ok, status, expected):
+    mock_url_ok.return_value = status
     result = evaluate.security_doc('url')
     assert result.passed == expected
 
@@ -275,7 +358,17 @@ def test_security_doc(mock_head, status, expected):
     'url,charm_name,expected',
     [
         ('https://github.com/canonical/foo-operator', 'foo', True),
+        ('https://github.com/canonical/foo-operators', 'foo', True),
         ('https://github.com/canonical/bar', 'foo', False),
+        ('https://github.com/canonical/data-integrator', 'data-integrator', True),
+        ('https://github.com/canonical/data-integrator-operator', 'data-integrator', False),
+        ('https://github.com/canonical/data-integrator', 'foo', False),
+        (
+            'https://github.com/canonical/request-authentication-configurator',
+            'request-authentication-configurator',
+            True,
+        ),
+        ('https://github.com/canonical/foo', 'foo', False),
     ],
 )
 def test_repository_name(url, charm_name, expected):
@@ -314,6 +407,14 @@ def test_repo_has_lock_file(tmp_path, lock_file):
     tmp2.mkdir()
     (tmp2 / 'pyproject.toml').write_text("[project]\nname = 'foo'\n")
     result = evaluate.repo_has_lock_file(tmp2)
+    assert result.passed is False
+
+
+@pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
+def test_repo_has_lock_file_missing_pyproject(tmp_path, lock_file):
+    """A lock file with no pyproject.toml must not tick the item."""
+    (tmp_path / lock_file).write_text('lock')
+    result = evaluate.repo_has_lock_file(tmp_path)
     assert result.passed is False
 
 
@@ -463,11 +564,13 @@ links:
         ),
     ],
 )
-@mock.patch('requests.head')
-def test_metadata_links_parametrized(mock_head, tmp_path, yaml_content, link_ok, expected_checked):
+@mock.patch('charmhub_listing_review.evaluate._url_ok')
+def test_metadata_links_parametrized(
+    mock_url_ok, tmp_path, yaml_content, link_ok, expected_checked
+):
     charmcraft_yaml = tmp_path / 'charmcraft.yaml'
     charmcraft_yaml.write_text(yaml_content)
-    mock_head.return_value.ok = link_ok
+    mock_url_ok.return_value = link_ok
     result = evaluate.metadata_links(tmp_path)
     assert result.passed == expected_checked
 

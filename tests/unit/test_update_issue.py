@@ -16,8 +16,11 @@
 
 import json
 import pathlib
+import urllib.error
+from typing import cast
 from unittest import mock
 
+import charmhub_listing_review.evaluate as evaluate
 import charmhub_listing_review.update_issue as update_issue
 from charmhub_listing_review.evaluate import CheckResult, EvaluationResult
 
@@ -305,3 +308,74 @@ def test_apply_automated_checks_ticks_passed():
     ):
         output = update_issue.apply_automated_checks(_make_issue_data(), comment)
     assert '* [x] The charm provides a license statement.' in output
+
+
+def test_issue_comment_includes_orphaned_check_bullets():
+    comment = update_issue.issue_comment(
+        'my-charm', 'https://demo.example.com', '', '', 'https://docs.example.com'
+    )
+    assert '* [ ] The charm provides contribution guidelines.' in comment
+    assert '* [ ] The charm provides a license statement.' in comment
+    assert '* [ ] The charm provides a security statement.' in comment
+
+
+@mock.patch('charmhub_listing_review.update_issue.evaluate')
+def test_apply_automated_checks_ticks_orphaned_checks(mock_evaluate):
+    mock_evaluate.return_value = _make_evaluation([
+        CheckResult(
+            name='contribution_guidelines',
+            passed=True,
+            description='* [x] The charm provides contribution guidelines.',
+        ),
+        CheckResult(
+            name='license_statement',
+            passed=True,
+            description='* [x] The charm provides a license statement.',
+        ),
+        CheckResult(
+            name='security_doc',
+            passed=True,
+            description='* [x] The charm provides a security statement.',
+        ),
+    ])
+    comment = (
+        '* [ ] The charm provides contribution guidelines.\n'
+        '* [ ] The charm provides a license statement.\n'
+        '* [ ] The charm provides a security statement.\n'
+    )
+    issue_data = {
+        'name': 'my-charm',
+        'project_repo': 'https://github.com/org/my-charm',
+        'ci_linting': '',
+        'contribution_link': 'https://github.com/org/my-charm/blob/main/CONTRIBUTING.md',
+        'license_link': 'https://github.com/org/my-charm/blob/main/LICENSE',
+        'security_link': 'https://github.com/org/my-charm/blob/main/SECURITY.md',
+        'default_branch': 'main',
+        'charm_dir': '.',
+    }
+    result = update_issue.apply_automated_checks(
+        cast('update_issue._IssueData', issue_data), comment
+    )
+    assert '* [x] The charm provides contribution guidelines.' in result
+    assert '* [x] The charm provides a license statement.' in result
+    assert '* [x] The charm provides a security statement.' in result
+
+
+@mock.patch('urllib.request.urlopen')
+def test_metadata_links_description_matches_comment(mock_urlopen, tmp_path):
+    """The metadata_links text must match an item in the issue comment.
+
+    apply_automated_checks ticks an item by substring matching the check's
+    result against the comment, so the two must stay identical.
+    """
+    # The best practices are fetched over the network, and are not needed here.
+    mock_urlopen.side_effect = urllib.error.URLError('no network')
+    comment = update_issue.issue_comment(
+        'my-charm',
+        'https://demo.example.com',
+        'https://release.example.com',
+        'https://integration.example.com',
+        'https://docs.example.com',
+    )
+    # With no charmcraft.yaml, the check returns its description unticked.
+    assert evaluate.metadata_links(tmp_path).description in comment

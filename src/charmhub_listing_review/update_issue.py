@@ -3,7 +3,6 @@
 # /// script
 # dependencies = [
 #   "pyyaml",
-#   "requests"
 # ]
 # ///
 
@@ -33,7 +32,7 @@ import json
 import pathlib
 import random
 import re
-import subprocess  # noqa: S404
+import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import urllib.error
 import urllib.request
 from typing import TypedDict, cast
@@ -88,10 +87,11 @@ When reviewing test coverage of the charm, note that:
 
 * [ ] The charm does what it is meant to do, per the [demo or tutorial]({demo_url}).
 * [ ] The [charm's page on Charmhub](https://charmhub.io/{name}) provides a quality impression. The overall appearance looks good and the [documentation]({documentation_link}) looks reasonable.
-* [ ] The charm has an icon.
+* [ ] The charm's name follows the pattern `<workload name>[-<function>][-k8s]` and contains only ASCII lowercase letters, numbers, and hyphens. It doesn't include `operator` or `charm` as a prefix or suffix, or an organisation or publisher name. See [Decide your charm's name](https://canonical.com/juju/docs/ops/latest/howto/initialise-your-project/#decide-your-charm-s-name).
+* [ ] The charm has an icon (recommended).
 * [ ] [Automated releasing]({ci_release_url}) to unstable channels exists
-* [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`.
-""".strip()  # noqa: E501
+* [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state.
+""".strip()  # ruff: ignore[line-too-long]
     ]
     description.append('\n\n')
     description.append(
@@ -100,9 +100,14 @@ When reviewing test coverage of the charm, note that:
 
 A charm's documentation should focus on the charm itself. For workload-specific or Juju-related content, link to the appropriate upstream documentation. A smaller charm can have single-page documentation for its description. A bigger charm should include a full Diátaxis navigation tree. Check that the charm has documentation that covers:
 * [ ] How to use the charm, including configuration, limitations, and deviations in behaviour from the “non-charmed” version of the application.
-* [ ] How to modify the charm
+* [ ] How to work with the charm's supported relations, including optional ones. For example, how to integrate with a charm that provides a required database, or how to integrate with a charm that provides optional observability.
+* [ ] Where to find developer documentation, for authors who are creating a charm that would integrate with this one.
+* [ ] How to contribute to the development of the charm. For example, how to set up a development environment, build the charm, run its tests, and propose changes.
 * [ ] A concise summary of the charm in the `charmcraft.yaml` 'summary' field, and a more detailed description in the `charmcraft.yaml` 'description' field.
-""".strip(),  # noqa: E501
+* [ ] The charm provides contribution guidelines.
+* [ ] The charm provides a license statement.
+* [ ] The charm provides a security statement.
+""".strip(),  # ruff: ignore[line-too-long]
     )
 
     # fmt: on
@@ -235,11 +240,11 @@ def assign_review(
         reviewers_data = yaml.safe_load(f)
     reviewers = reviewers_data['reviewers']
     teams = [info['team'] for info in reviewers.values()]
-    team = random.choice(teams)  # noqa: S311
+    team = random.choice(teams)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
     # If there happen to be multiple people in a team, then randomly pick among
     # them.
     team_reviewers = [name for name, info in reviewers.items() if info['team'] == team]
-    reviewer = random.choice(team_reviewers)  # noqa: S311
+    reviewer = random.choice(team_reviewers)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
 
     if not dry_run:
         cmd = ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', reviewer[1:]]

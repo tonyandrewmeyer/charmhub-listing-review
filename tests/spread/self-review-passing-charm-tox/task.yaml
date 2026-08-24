@@ -1,4 +1,4 @@
-summary: Self-review CLI runs against a well-formed charm
+summary: Self-review CLI runs against a well-formed charm that uses tox for tooling
 systems:
   - ubuntu-24.04
 
@@ -7,13 +7,14 @@ execute: |
 
   # Create a passing test charm fixture.
   CHARM_DIR=$(mktemp -d)
-  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing
+  bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing-tox
 
   # Run self-review pointing at the local file:// repo.
   output=$(uv run --directory "$SPREAD_PATH" \
     self-review \
       --charm-name test-charm \
-      --repository "file://$CHARM_DIR" 2>&1) || true
+      --repository "file://$CHARM_DIR" \
+      --ci-linting-url "file://$CHARM_DIR/tox.ini" 2>&1) || true
 
   echo "$output"
 

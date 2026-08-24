@@ -51,7 +51,7 @@ class CopilotBackend:
     def unavailability_reason(self) -> str | None:
         """Return a human-readable reason why this backend is unavailable, or None if available."""
         try:
-            import copilot  # noqa: F401  # ty: ignore[unresolved-import]
+            import copilot  # ruff: ignore[unused-import]  # ty: ignore[unresolved-import]
         except ImportError:
             return "the 'github-copilot-sdk' package is not installed (run: uv sync --group ai)"
         if not shutil.which('copilot'):
