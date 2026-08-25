@@ -63,7 +63,7 @@ class TestEvaluateCharmDir:
         )
         (charm_subdir / 'pyproject.toml').write_text('[project]\nrequires-python = ">=3.10"\n')
         mock_clone.return_value = tmp_path
-        results = evaluate.evaluate(
+        evaluation = evaluate.evaluate(
             charm_name='my-charm',
             repository_url='https://github.com/org/my-charm-operator',
             linting_url='',
@@ -73,11 +73,9 @@ class TestEvaluateCharmDir:
             charm_dir='charms/my-charm',
         )
         # python_requires_version should pass because pyproject.toml is in the subdirectory.
-        python_result = [
-            r for r in results if 'requires-python' in r.lower() or 'requires_python' in r.lower()
-        ]
+        python_result = [r for r in evaluation.checks if r.name == 'python_requires_version']
         assert python_result
-        assert python_result[0].startswith('* [x]')
+        assert python_result[0].passed is True
 
     def test_evaluate_rejects_absolute_charm_dir(self):
         with pytest.raises(ValueError, match='relative path'):
@@ -169,7 +167,7 @@ config:
 """
     charmcraft_yaml.write_text(yaml_content)
     result = getattr(evaluate, method)(tmp_path)
-    assert (result.startswith('* [x]')) == expected
+    assert result.passed == expected
 
 
 @pytest.mark.parametrize(
@@ -208,7 +206,8 @@ config:
 )
 def test_check_charm_name(charm_name, expected):
     result = evaluate.check_charm_name(charm_name)
-    assert (result.startswith('* [x]')) == expected
+    assert result.passed == expected
+    assert result.checklist_id == 'charm-name'
 
 
 def test_check_charm_name_text_matches_the_checklist_item():
@@ -225,7 +224,7 @@ def test_check_charm_name_text_matches_the_checklist_item():
         ci_release_url='https://example.com/release',
         ci_integration_url='https://example.com/integration',
     )
-    assert convert_sphinx_refs(unticked) in comment
+    assert convert_sphinx_refs(unticked.description) in comment
 
 
 @mock.patch('charmhub_listing_review.evaluate._url_ok')
@@ -233,7 +232,7 @@ def test_check_charm_name_text_matches_the_checklist_item():
 def test_contribution_guidelines(mock_url_ok, status, expected):
     mock_url_ok.return_value = status
     result = evaluate.contribution_guidelines('url')
-    assert (result.startswith('* [x]')) == expected
+    assert result.passed == expected
 
 
 @mock.patch('charmhub_listing_review.evaluate._url_ok')
@@ -241,8 +240,9 @@ def test_contribution_guidelines(mock_url_ok, status, expected):
 def test_coding_conventions(mock_url_ok, status, expected):
     mock_url_ok.return_value = status
     result = evaluate.coding_conventions('url')
-    assert (result.startswith('* [x]')) == expected
-    assert result.replace('* [x]', '* [ ]') == (
+    assert result.passed == expected
+    assert result.checklist_id == 'best-practice-automated-ci'
+    assert result.description.replace('* [x]', '* [ ]') == (
         '* [ ] The quality assurance pipeline of a charm should be automated '
         'using a continuous integration (CI) system.'
     )
@@ -255,18 +255,18 @@ def test_license_statement_known_license(mock_fetch, license_hash):
     with mock.patch('hashlib.sha512') as mock_hash:
         mock_hash.return_value.hexdigest.return_value = license_hash
         result = evaluate.license_statement('url')
-        assert result.startswith('* [x]')
+        assert result.passed is True
 
 
 @mock.patch('charmhub_listing_review.evaluate._fetch_url')
 def test_license_statement_fails(mock_fetch):
     mock_fetch.return_value = None
     result = evaluate.license_statement('url')
-    assert result.startswith('* [ ]')
+    assert result.passed is False
 
     mock_fetch.return_value = 'Some Unknown License'
     result = evaluate.license_statement('url')
-    assert result.startswith('* [ ]')
+    assert result.passed is False
 
 
 @mock.patch('charmhub_listing_review.evaluate._fetch_url')
@@ -311,7 +311,7 @@ def test_raw_content_url(url, expected):
 def test_security_doc(mock_url_ok, status, expected):
     mock_url_ok.return_value = status
     result = evaluate.security_doc('url')
-    assert result.startswith('* [x]') == expected
+    assert result.passed == expected
 
 
 @pytest.mark.parametrize(
@@ -333,7 +333,8 @@ def test_security_doc(mock_url_ok, status, expected):
 )
 def test_repository_name(url, charm_name, expected):
     result = evaluate.repository_name(url, charm_name)
-    assert (result.startswith('* [x]')) == expected
+    assert result.passed == expected
+    assert result.checklist_id == 'best-practice-repository-naming'
 
 
 def test_python_requires_version(tmp_path):
@@ -343,7 +344,8 @@ def test_python_requires_version(tmp_path):
     requires-python = ">=3.10"
     """)
     result = evaluate.python_requires_version(tmp_path)
-    assert result.startswith('* [x]')
+    assert result.passed is True
+    assert result.checklist_id == 'best-practice-requires-python'
 
 
 def test_missing_python_requires_version(tmp_path):
@@ -353,7 +355,8 @@ def test_missing_python_requires_version(tmp_path):
     name = "foo"
     """)
     result = evaluate.python_requires_version(tmp_path)
-    assert result.startswith('* [ ]')
+    assert result.passed is False
+    assert result.checklist_id == 'best-practice-requires-python'
 
 
 @pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
@@ -361,13 +364,15 @@ def test_repo_has_lock_file(tmp_path, lock_file):
     (tmp_path / 'pyproject.toml').write_text("[project]\nname = 'foo'\n")
     (tmp_path / lock_file).write_text('lock')
     result = evaluate.repo_has_lock_file(tmp_path)
-    assert result.startswith('* [x]')
+    assert result.passed is True
+    assert result.checklist_id == 'best-practice-commit-lock-file'
 
     tmp2 = tmp_path / 'no_repo'
     tmp2.mkdir()
     (tmp2 / 'pyproject.toml').write_text("[project]\nname = 'foo'\n")
     result = evaluate.repo_has_lock_file(tmp2)
-    assert result.startswith('* [ ]')
+    assert result.passed is False
+    assert result.checklist_id == 'best-practice-commit-lock-file'
 
 
 @pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
@@ -375,22 +380,33 @@ def test_repo_has_lock_file_missing_pyproject(tmp_path, lock_file):
     """A lock file with no pyproject.toml must not tick the item."""
     (tmp_path / lock_file).write_text('lock')
     result = evaluate.repo_has_lock_file(tmp_path)
-    assert result.startswith('* [ ]')
+    assert result.passed is False
+    assert result.checklist_id == 'best-practice-commit-lock-file'
 
 
 def test_charm_has_icon(tmp_path):
     icon = tmp_path / 'icon.svg'
     icon.write_text('<svg width="100" height="100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
-    assert result.startswith('* [x]')
+    assert result.passed is True
+    assert result.checklist_id == 'charm-has-icon'
+    assert result.optional is True
 
     icon.write_text('<svg viewBox="0 0 100 100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
     icon.write_text('<svg width="99" height="99"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
-    assert result.startswith('* [ ]')
+    assert result.passed is False
+    assert result.optional is True
+
+
+def test_charm_has_icon_missing_is_optional(tmp_path):
+    """A missing icon is a recommendation, not a hard requirement."""
+    result = evaluate.charm_has_icon(tmp_path)
+    assert result.passed is False
+    assert result.optional is True
 
 
 @pytest.mark.parametrize(
@@ -447,9 +463,9 @@ def test_charm_has_icon_included_in_build(tmp_path, parts, expected_checked):
     (tmp_path / 'charmcraft.yaml').write_text(f'name: test-charm\n{parts}')
     result = evaluate.charm_has_icon(tmp_path)
     if expected_checked:
-        assert result.startswith('* [x]')
+        assert result.description.startswith('* [x]')
     else:
-        assert result.startswith('* [ ]')
+        assert result.description.startswith('* [ ]')
 
 
 @pytest.mark.parametrize(
@@ -532,7 +548,7 @@ def test_metadata_links_parametrized(
     charmcraft_yaml.write_text(yaml_content)
     mock_url_ok.return_value = link_ok
     result = evaluate.metadata_links(tmp_path)
-    assert (result.startswith('* [x]')) == expected_checked
+    assert result.passed == expected_checked
 
 
 def test_check_action_names_monorepo(tmp_path):
@@ -546,7 +562,7 @@ actions:
     valid-action: {}
 """)
     result = evaluate.action_names(charm_dir)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
 
 def test_python_requires_version_monorepo(tmp_path):
@@ -559,7 +575,7 @@ def test_python_requires_version_monorepo(tmp_path):
 requires-python = ">=3.10"
 """)
     result = evaluate.python_requires_version(charm_dir)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
 
 def test_charm_has_icon_monorepo(tmp_path):
@@ -569,7 +585,7 @@ def test_charm_has_icon_monorepo(tmp_path):
     icon = charm_dir / 'icon.svg'
     icon.write_text('<svg width="100" height="100"></svg>')
     result = evaluate.charm_has_icon(charm_dir)
-    assert result.startswith('* [x]')
+    assert result.passed is True
 
 
 @pytest.mark.parametrize(
@@ -631,4 +647,27 @@ def test_relations_includes_optional(tmp_path, yaml_content, expected_checked):
     charmcraft_yaml = tmp_path / 'charmcraft.yaml'
     charmcraft_yaml.write_text(yaml_content)
     result = evaluate.relations_includes_optional(tmp_path)
-    assert (result.startswith('* [x]')) == expected_checked
+    assert result.passed == expected_checked
+    # Awaiting the canonical/charmcraft `:name:` PR before this maps to an ID.
+    assert result.checklist_id is None
+
+
+def test_charmcraft_tooling_runs_the_commands_in_the_charm(tmp_path):
+    """The profile commands run in the charm's directory, not the cwd.
+
+    Without an explicit cwd the tooling commands ran wherever the reviewer
+    happened to be, so a well-formed charm failed the check for reasons that
+    had nothing to do with the charm.
+    """
+    (tmp_path / 'tox.ini').write_text(
+        '[testenv:format]\ncommands = true\n'
+        '[testenv:lint]\ncommands = true\n'
+        '[testenv:unit]\ncommands = true\n'
+        '[testenv:integration]\ncommands = true\n'
+    )
+    with mock.patch('subprocess.check_output') as check_output:
+        result = evaluate.charmcraft_tooling(tmp_path)
+    assert result.passed
+    assert check_output.call_args_list
+    for call in check_output.call_args_list:
+        assert call.kwargs['cwd'] == tmp_path

@@ -85,12 +85,12 @@ When reviewing test coverage of the charm, note that:
 ```
 ## Listing requirements
 
-* [ ] The charm does what it is meant to do, per the [demo or tutorial]({demo_url}).
-* [ ] The [charm's page on Charmhub](https://charmhub.io/{name}) provides a quality impression. The overall appearance looks good and the [documentation]({documentation_link}) looks reasonable.
-* [ ] The charm's name follows the pattern `<workload name>[-<function>][-k8s]` and contains only ASCII lowercase letters, numbers, and hyphens. It doesn't include `operator` or `charm` as a prefix or suffix, or an organisation or publisher name. See [Decide your charm's name](https://canonical.com/juju/docs/ops/latest/howto/initialise-your-project/#decide-your-charm-s-name).
-* [ ] The charm has an icon (recommended).
-* [ ] [Automated releasing]({ci_release_url}) to unstable channels exists
-* [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state.
+* [ ] The charm does what it is meant to do, per the [demo or tutorial]({demo_url}). <!-- id: charm-demo -->
+* [ ] The [charm's page on Charmhub](https://charmhub.io/{name}) provides a quality impression. The overall appearance looks good and the [documentation]({documentation_link}) looks reasonable. <!-- id: charmhub-quality-impression -->
+* [ ] The charm's name follows the pattern `<workload name>[-<function>][-k8s]` and contains only ASCII lowercase letters, numbers, and hyphens. It doesn't include `operator` or `charm` as a prefix or suffix, or an organisation or publisher name. See [Decide your charm's name](https://canonical.com/juju/docs/ops/latest/howto/initialise-your-project/#decide-your-charm-s-name). <!-- id: charm-name -->
+* [ ] The charm has an icon (recommended). <!-- id: charm-has-icon -->
+* [ ] [Automated releasing]({ci_release_url}) to unstable channels exists <!-- id: ci-automated-releasing -->
+* [ ] [Integration tests]({ci_integration_url}) exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`. <!-- id: ci-integration-tests -->
 """.strip()  # ruff: ignore[line-too-long]
     ]
     description.append('\n\n')
@@ -99,14 +99,14 @@ When reviewing test coverage of the charm, note that:
 ### Documentation
 
 A charm's documentation should focus on the charm itself. For workload-specific or Juju-related content, link to the appropriate upstream documentation. A smaller charm can have single-page documentation for its description. A bigger charm should include a full Diátaxis navigation tree. Check that the charm has documentation that covers:
-* [ ] How to use the charm, including configuration, limitations, and deviations in behaviour from the “non-charmed” version of the application.
-* [ ] How to work with the charm's supported relations, including optional ones. For example, how to integrate with a charm that provides a required database, or how to integrate with a charm that provides optional observability.
-* [ ] Where to find developer documentation, for authors who are creating a charm that would integrate with this one.
-* [ ] How to contribute to the development of the charm. For example, how to set up a development environment, build the charm, run its tests, and propose changes.
-* [ ] A concise summary of the charm in the `charmcraft.yaml` 'summary' field, and a more detailed description in the `charmcraft.yaml` 'description' field.
-* [ ] The charm provides contribution guidelines.
-* [ ] The charm provides a license statement.
-* [ ] The charm provides a security statement.
+* [ ] How to use the charm, including configuration, limitations, and deviations in behaviour from the “non-charmed” version of the application. <!-- id: doc-how-to-use -->
+* [ ] How to work with the charm's supported relations, including optional ones. For example, how to integrate with a charm that provides a required database, or how to integrate with a charm that provides optional observability. <!-- id: doc-relations -->
+* [ ] Where to find developer documentation, for authors who are creating a charm that would integrate with this one. <!-- id: doc-developer-docs -->
+* [ ] How to contribute to the development of the charm. For example, how to set up a development environment, build the charm, run its tests, and propose changes. <!-- id: doc-how-to-contribute -->
+* [ ] A concise summary of the charm in the `charmcraft.yaml` 'summary' field, and a more detailed description in the `charmcraft.yaml` 'description' field. <!-- id: charmcraft-summary-description -->
+* [ ] The charm provides contribution guidelines. <!-- id: doc-contribution-guidelines -->
+* [ ] The charm provides a license statement. <!-- id: doc-license-statement -->
+* [ ] The charm provides a security statement. <!-- id: doc-security-statement -->
 """.strip(),  # ruff: ignore[line-too-long]
     )
 
@@ -119,8 +119,10 @@ A charm's documentation should focus on the charm itself. For workload-specific 
     else:
         best_practices_content = convert_sphinx_refs(best_practices_content)
         best_practices = best_practices_content.splitlines()
-    # Remove the headings and empty lines.
-    best_practices = [line for line in best_practices if line.startswith('-')]
+    # Remove the headings, empty lines, and the generated file's leading HTML
+    # comment block, whose closing `-->` is otherwise indistinguishable from a
+    # bullet if only the leading `-` is tested for.
+    best_practices = [line for line in best_practices if line.startswith('- ')]
     if best_practices:
         description.append('\n\n')
         description.append(
@@ -341,9 +343,19 @@ review within the next three working days.
         subprocess.run(cmd, check=True)
 
 
+_ID_MARKER_RE = re.compile(r'<!--\s*id:\s*(\S+)\s*-->')
+
+
 def apply_automated_checks(issue_data: _IssueData, comment: str):
-    """Adjust the comment to tick items based on automated checks."""
-    results = evaluate(
+    """Tick checklist items based on automated check results.
+
+    Each checklist line carries a `<!-- id: <slug> -->` HTML comment that
+    identifies it. We match those IDs against ``CheckResult.checklist_id`` and
+    flip ``* [ ]`` to ``* [x]`` for any check that passed. Lines without a
+    matching automated check (or whose check did not pass) are left untouched
+    for the reviewer to handle manually.
+    """
+    evaluation = evaluate(
         issue_data['name'],
         issue_data['project_repo'],
         issue_data['ci_linting'],
@@ -353,12 +365,14 @@ def apply_automated_checks(issue_data: _IssueData, comment: str):
         issue_data['default_branch'],
         charm_dir=issue_data.get('charm_dir', '.'),
     )
-    for result in results:
-        # Convert Sphinx refs in the result to match the converted comment.
-        result = convert_sphinx_refs(result)
-        if result.replace('* [x]', '* [ ]') in comment:
-            comment = comment.replace(result.replace('* [x]', '* [ ]'), result)
-    return comment
+    passed_ids = {r.checklist_id for r in evaluation.checks if r.checklist_id and r.passed is True}
+    new_lines: list[str] = []
+    for line in comment.splitlines():
+        match = _ID_MARKER_RE.search(line)
+        if match and match.group(1) in passed_ids:
+            line = line.replace('* [ ]', '* [x]', 1)
+        new_lines.append(line)
+    return '\n'.join(new_lines)
 
 
 def main():

@@ -25,10 +25,12 @@ execute: |
   # it should stay as a manual-review item (❓).
   echo "$output" | MATCH "❓.*icon"
 
-  # Lock file should fail.
+  # Lock file and requires-python are "Best practices" items fetched live from
+  # canonical/operator's best-practices.txt. They used to stay at manual review
+  # because the fetched text carried no id the matcher could key off; the :name:
+  # anchors from canonical/operator#2524 landed 2026-08-16 and this branch parses
+  # them, so both now resolve for real. This fixture has neither, so both fail.
   echo "$output" | MATCH "❌.*lock file" || echo "$output" | MATCH "❌.*committed to version control"
-
-  # pyproject requires-python should fail.
   echo "$output" | MATCH "❌.*requires-python"
 
 restore: |
