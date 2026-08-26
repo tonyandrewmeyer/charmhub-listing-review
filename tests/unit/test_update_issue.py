@@ -294,20 +294,112 @@ def _make_evaluation(checks):
 
 
 def test_apply_automated_checks_ticks_passed():
-    """apply_automated_checks replaces unchecked items with checked for passing results."""
+    """A passing check with a matching checklist_id flips '[ ]' to '[x]'."""
     result = CheckResult(
-        name='license',
+        name='charm_has_icon',
         passed=True,
-        description='* [x] The charm provides a license statement.',
+        description='ignored — matching is now by ID, not description text',
         context={},
+        checklist_id='charm-has-icon',
     )
-    comment = '* [ ] The charm provides a license statement.'
+    comment = '* [ ] The charm has an icon. <!-- id: charm-has-icon -->'
     with mock.patch(
         'charmhub_listing_review.update_issue.evaluate',
         return_value=_make_evaluation([result]),
     ):
         output = update_issue.apply_automated_checks(_make_issue_data(), comment)
-    assert '* [x] The charm provides a license statement.' in output
+    assert output == '* [x] The charm has an icon. <!-- id: charm-has-icon -->'
+
+
+def test_apply_automated_checks_leaves_failed_unticked():
+    """A failed check leaves the checkbox empty for the reviewer."""
+    result = CheckResult(
+        name='charm_has_icon',
+        passed=False,
+        description='...',
+        context={},
+        checklist_id='charm-has-icon',
+    )
+    comment = '* [ ] The charm has an icon. <!-- id: charm-has-icon -->'
+    with mock.patch(
+        'charmhub_listing_review.update_issue.evaluate',
+        return_value=_make_evaluation([result]),
+    ):
+        output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    assert output == '* [ ] The charm has an icon. <!-- id: charm-has-icon -->'
+
+
+def test_apply_automated_checks_ignores_unknown_id():
+    """A check whose id isn't in the comment leaves the comment unchanged."""
+    result = CheckResult(
+        name='charm_has_icon',
+        passed=True,
+        description='...',
+        context={},
+        checklist_id='something-else-entirely',
+    )
+    comment = '* [ ] The charm has an icon. <!-- id: charm-has-icon -->'
+    with mock.patch(
+        'charmhub_listing_review.update_issue.evaluate',
+        return_value=_make_evaluation([result]),
+    ):
+        output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    assert output == comment
+
+
+def test_apply_automated_checks_skips_checks_without_checklist_id():
+    """Checks with checklist_id=None never tick anything."""
+    result = CheckResult(
+        name='check_charm_name',
+        passed=True,
+        description='...',
+        context={},
+        checklist_id=None,
+    )
+    # A line that happens to share a description prefix would have been
+    # ticked by the old string-matching code; it must NOT be ticked now.
+    comment = (
+        '* [ ] The charm name should be slug-oriented. <!-- id: best-practice-charm-name-slug -->'
+    )
+    with mock.patch(
+        'charmhub_listing_review.update_issue.evaluate',
+        return_value=_make_evaluation([result]),
+    ):
+        output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    assert output == comment
+
+
+def test_apply_automated_checks_multiline_comment():
+    """Items with IDs on different lines are ticked independently."""
+    results = [
+        CheckResult(
+            name='repository_name',
+            passed=True,
+            description='...',
+            context={},
+            checklist_id='best-practice-repository-naming',
+        ),
+        CheckResult(
+            name='charm_has_icon',
+            passed=False,
+            description='...',
+            context={},
+            checklist_id='charm-has-icon',
+        ),
+    ]
+    comment = (
+        '* [ ] The charm has an icon. <!-- id: charm-has-icon -->\n'
+        '* [ ] Name the repository... <!-- id: best-practice-repository-naming -->\n'
+        '* [ ] Some manual item, no id.\n'
+    )
+    with mock.patch(
+        'charmhub_listing_review.update_issue.evaluate',
+        return_value=_make_evaluation(results),
+    ):
+        output = update_issue.apply_automated_checks(_make_issue_data(), comment)
+    assert '* [ ] The charm has an icon. <!-- id: charm-has-icon -->' in output
+    assert '* [x] Name the repository... <!-- id: best-practice-repository-naming -->' in output
+    assert '* [ ] Some manual item, no id.' in output
 
 
 def test_issue_comment_includes_orphaned_check_bullets():
@@ -321,27 +413,35 @@ def test_issue_comment_includes_orphaned_check_bullets():
 
 @mock.patch('charmhub_listing_review.update_issue.evaluate')
 def test_apply_automated_checks_ticks_orphaned_checks(mock_evaluate):
+    """The three doc checks wired in #160 tick via their checklist_id, not text-matching."""
     mock_evaluate.return_value = _make_evaluation([
         CheckResult(
             name='contribution_guidelines',
             passed=True,
-            description='* [x] The charm provides contribution guidelines.',
+            description='...',
+            context={},
+            checklist_id='doc-contribution-guidelines',
         ),
         CheckResult(
             name='license_statement',
             passed=True,
-            description='* [x] The charm provides a license statement.',
+            description='...',
+            context={},
+            checklist_id='doc-license-statement',
         ),
         CheckResult(
             name='security_doc',
             passed=True,
-            description='* [x] The charm provides a security statement.',
+            description='...',
+            context={},
+            checklist_id='doc-security-statement',
         ),
     ])
     comment = (
-        '* [ ] The charm provides contribution guidelines.\n'
-        '* [ ] The charm provides a license statement.\n'
-        '* [ ] The charm provides a security statement.\n'
+        '* [ ] The charm provides contribution guidelines.'
+        ' <!-- id: doc-contribution-guidelines -->\n'
+        '* [ ] The charm provides a license statement. <!-- id: doc-license-statement -->\n'
+        '* [ ] The charm provides a security statement. <!-- id: doc-security-statement -->\n'
     )
     issue_data = {
         'name': 'my-charm',
@@ -379,3 +479,31 @@ def test_metadata_links_description_matches_comment(mock_urlopen, tmp_path):
     )
     # With no charmcraft.yaml, the check returns its description unticked.
     assert evaluate.metadata_links(tmp_path).description in comment
+
+
+@mock.patch('urllib.request.urlopen')
+def test_best_practices_skips_the_generated_comment_header(mock_urlopen):
+    """The closing `-->` of the source file's header is not a best practice.
+
+    best-practices.txt is generated with a leading HTML comment block
+    explaining how it is produced. Its closing `-->` starts with a hyphen, so
+    testing only for a leading `-` picked it up as a bullet and rendered an
+    empty checklist item.
+    """
+    content = (
+        '<!--\nThis file is auto-generated.\nDo not edit this file directly.\n-->\n'
+        '\n'
+        '**[How to initialise your project](https://example.com/)**\n'
+        '- Name the repository `<charm name>-operator`. '
+        '<!-- id: best-practice-repository-naming -->\n'
+    )
+    mock_urlopen.return_value.__enter__.return_value.read.return_value = content.encode()
+    comment = update_issue.issue_comment(
+        'my-charm',
+        'https://demo.example.com',
+        'https://release.example.com',
+        'https://integration.example.com',
+        'https://docs.example.com',
+    )
+    assert '* [ ] -->' not in comment
+    assert '* [ ] Name the repository' in comment

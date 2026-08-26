@@ -34,6 +34,21 @@ class CheckResult:
     context: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Extra check-specific data (e.g. {"url": "...", "status_code": 404})."""
 
+    checklist_id: str | None = None
+    """The ID of the checklist item this check corresponds to.
+
+    Matches `<!-- id: ... -->` markers in the rendered checklist. ``None``
+    means this check has no matching checklist entry (yet) and won't auto-tick.
+    """
+
+    optional: bool = False
+    """True if this check is a recommendation rather than a requirement.
+
+    A ``passed=False`` result for an optional check is not a hard failure: the
+    self-review console output leaves it as a manual-review item (``❓``)
+    instead of marking it failed (``❌``).
+    """
+
 
 @dataclasses.dataclass
 class EvaluationResult:

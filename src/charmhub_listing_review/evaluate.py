@@ -170,15 +170,13 @@ def coding_conventions(linting_url: str) -> CheckResult:
     context: dict[str, Any] = {'linting_url': linting_url}
     # Ideally, this would also check that the CI actually runs linting, but that
     # is more difficult to automate.
-    if _url_ok(linting_url):
-        return CheckResult(
-            name='coding_conventions',
-            passed=True,
-            description=description.replace('* [ ]', '* [x]'),
-            context=context,
-        )
+    passed = _url_ok(linting_url)
     return CheckResult(
-        name='coding_conventions', passed=False, description=description, context=context
+        name='coding_conventions',
+        passed=passed,
+        description=description.replace('* [ ]', '* [x]') if passed else description,
+        context=context,
+        checklist_id='best-practice-automated-ci',
     )
 
 
@@ -198,9 +196,14 @@ def contribution_guidelines(contribution_url: str) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='doc-contribution-guidelines',
         )
     return CheckResult(
-        name='contribution_guidelines', passed=False, description=description, context=context
+        name='contribution_guidelines',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='doc-contribution-guidelines',
     )
 
 
@@ -225,7 +228,11 @@ def license_statement(license_url: str) -> CheckResult:
     if text is None:
         context['error'] = 'could not fetch the license file'
         return CheckResult(
-            name='license_statement', passed=False, description=description, context=context
+            name='license_statement',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='doc-license-statement',
         )
     # Check for known licenses, with a simple hash.
     license_hash = hashlib.sha512(text.strip().encode('utf-8')).hexdigest()
@@ -240,7 +247,11 @@ def license_statement(license_url: str) -> CheckResult:
     context['known_license'] = False
     # If it's another license, then let the reviewer decide if it's a license file.
     return CheckResult(
-        name='license_statement', passed=False, description=description, context=context
+        name='license_statement',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='doc-license-statement',
     )
 
 
@@ -260,8 +271,15 @@ def security_doc(security_url: str) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='doc-security-statement',
         )
-    return CheckResult(name='security_doc', passed=False, description=description, context=context)
+    return CheckResult(
+        name='security_doc',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='doc-security-statement',
+    )
 
 
 def get_default_branch(repository_url: str, *, unauthenticated_first: bool = False) -> str:
@@ -379,7 +397,11 @@ def metadata_links(repo_dir: pathlib.Path) -> CheckResult:
     if not data:
         context['error'] = 'charmcraft.yaml not found or invalid'
         return CheckResult(
-            name='metadata_links', passed=False, description=description, context=context
+            name='metadata_links',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charmcraft-summary-description',
         )
     default_desc = """A single sentence that says what the charm is, concisely and memorably.
 
@@ -402,7 +424,11 @@ Finally, a paragraph that describes whom the charm is useful for.\n"""
     if missing_fields:
         context['missing_or_default_fields'] = missing_fields
         return CheckResult(
-            name='metadata_links', passed=False, description=description, context=context
+            name='metadata_links',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charmcraft-summary-description',
         )
 
     links = data.get('links', {})
@@ -421,7 +447,11 @@ Finally, a paragraph that describes whom the charm is useful for.\n"""
     if broken_links:
         context['broken_links'] = broken_links
         return CheckResult(
-            name='metadata_links', passed=False, description=description, context=context
+            name='metadata_links',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charmcraft-summary-description',
         )
 
     return CheckResult(
@@ -429,6 +459,7 @@ Finally, a paragraph that describes whom the charm is useful for.\n"""
         passed=True,
         description=description.replace('* [ ]', '* [x]'),
         context=context,
+        checklist_id='charmcraft-summary-description',
     )
 
 
@@ -477,8 +508,6 @@ def check_charm_name(charm_name: str) -> CheckResult:
     ``<workload name>[-<function>][-k8s]``, with no organisation or publisher
     name and no ``operator``/``charm`` prefix or suffix.
     """
-    # This must match the corresponding bullet in update_issue.issue_comment
-    # exactly, or apply_automated_checks cannot tick it.
     description = re.sub(
         r'\s+',
         ' ',
@@ -495,6 +524,7 @@ def check_charm_name(charm_name: str) -> CheckResult:
         passed=passed,
         description=description.replace('* [ ]', '* [x]') if passed else description,
         context={'charm_name': charm_name},
+        checklist_id='charm-name',
     )
 
 
@@ -507,6 +537,8 @@ def action_names(repo_dir: pathlib.Path) -> CheckResult:
     The repository contains a `charmcraft.yaml` file that includes an actions
     field, and each action is named appropriately.
     """
+    # TODO: set checklist_id once canonical/charmcraft adds `:name:` to its
+    # 'lowercase alphanumeric action names' best practice admonition.
     # This has to match the description in the Charmcraft documentation.
     description = re.sub(
         r'\s+',
@@ -552,6 +584,8 @@ def option_names(repo_dir: pathlib.Path) -> CheckResult:
     field, itself containing an options field, and each option is named
     appropriately.
     """
+    # TODO: set checklist_id once canonical/charmcraft adds `:name:` to its
+    # 'lowercase alphanumeric option names' best practice admonition.
     # This has to match the description in the Charmcraft documentation.
     description = re.sub(
         r'\s+',
@@ -618,6 +652,7 @@ def repository_name(repository_url: str, charm_name: str) -> CheckResult:
         passed=passed,
         description=description.replace('* [ ]', '* [x]') if passed else description,
         context={'repo_name': repo_name, 'charm_name': charm_name},
+        checklist_id='best-practice-repository-naming',
     )
 
 
@@ -632,6 +667,9 @@ def relations_includes_optional(repo_dir: pathlib.Path) -> CheckResult:
     The charm's relations are defined in the `charmcraft.yaml` file, in requires
     and provides fields, and each relation includes the `optional` key.
     """
+    # TODO: set checklist_id once canonical/charmcraft adds `:name:` to its
+    # 'include the optional key in all endpoint definitions' best practice
+    # admonition.
     # This has to match the description in the Charmcraft documentation.
     description = re.sub(
         r'\s+',
@@ -698,7 +736,11 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> CheckResult:
     else:
         context['error'] = 'no tooling file found (Makefile, Justfile, or tox.ini)'
         return CheckResult(
-            name='charmcraft_tooling', passed=False, description=description, context=context
+            name='charmcraft_tooling',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='best-practice-charmcraft-profile-commands',
         )
 
     # Check for commands in the files
@@ -733,11 +775,15 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> CheckResult:
 
     for command in commands_to_run:
         try:
-            subprocess.check_output(command, stderr=subprocess.DEVNULL)
+            subprocess.check_output(command, cwd=repo_dir, stderr=subprocess.DEVNULL)
         except (subprocess.CalledProcessError, FileNotFoundError):
             context['failed_command'] = command
             return CheckResult(
-                name='charmcraft_tooling', passed=False, description=description, context=context
+                name='charmcraft_tooling',
+                passed=False,
+                description=description,
+                context=context,
+                checklist_id='best-practice-charmcraft-profile-commands',
             )
 
     if all(command in found_commands for command in commands):
@@ -746,9 +792,14 @@ def charmcraft_tooling(repo_dir: pathlib.Path) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='best-practice-charmcraft-profile-commands',
         )
     return CheckResult(
-        name='charmcraft_tooling', passed=False, description=description, context=context
+        name='charmcraft_tooling',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='best-practice-charmcraft-profile-commands',
     )
 
 
@@ -779,7 +830,11 @@ def python_requires_version(repo_dir: pathlib.Path) -> CheckResult:
     if not pyproject_path.is_file():
         context['error'] = 'pyproject.toml not found'
         return CheckResult(
-            name='python_requires_version', passed=False, description=description, context=context
+            name='python_requires_version',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='best-practice-requires-python',
         )
     try:
         with pyproject_path.open('rb') as f:
@@ -787,7 +842,11 @@ def python_requires_version(repo_dir: pathlib.Path) -> CheckResult:
     except Exception as e:
         context['error'] = f'failed to parse pyproject.toml: {e}'
         return CheckResult(
-            name='python_requires_version', passed=False, description=description, context=context
+            name='python_requires_version',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='best-practice-requires-python',
         )
     requires_python = None
     if 'project' in data and 'requires-python' in data['project']:
@@ -802,9 +861,14 @@ def python_requires_version(repo_dir: pathlib.Path) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='best-practice-requires-python',
         )
     return CheckResult(
-        name='python_requires_version', passed=False, description=description, context=context
+        name='python_requires_version',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='best-practice-requires-python',
     )
 
 
@@ -828,7 +892,11 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> CheckResult:
     if not (repo_dir / 'pyproject.toml').is_file():
         context['error'] = 'pyproject.toml not found'
         return CheckResult(
-            name='repo_has_lock_file', passed=False, description=description, context=context
+            name='repo_has_lock_file',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='best-practice-commit-lock-file',
         )
     found_lock = [lf for lf in lock_files if (repo_dir / lf).is_file()]
     if found_lock:
@@ -838,9 +906,14 @@ def repo_has_lock_file(repo_dir: pathlib.Path) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='best-practice-commit-lock-file',
         )
     return CheckResult(
-        name='repo_has_lock_file', passed=False, description=description, context=context
+        name='repo_has_lock_file',
+        passed=False,
+        description=description,
+        context=context,
+        checklist_id='best-practice-commit-lock-file',
     )
 
 
@@ -874,7 +947,12 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
     if not icon_path.is_file():
         context['error'] = 'icon.svg not found'
         return CheckResult(
-            name='charm_has_icon', passed=False, description=description, context=context
+            name='charm_has_icon',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charm-has-icon',
+            optional=True,
         )
     tree = ET.parse(icon_path)  # ruff: ignore[suspicious-xml-element-tree-usage]
     root = tree.getroot()
@@ -898,7 +976,12 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
             correct_size = math.isclose(vb_width, 100) and math.isclose(vb_height, 100)
     if not correct_size:
         return CheckResult(
-            name='charm_has_icon', passed=False, description=description, context=context
+            name='charm_has_icon',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charm-has-icon',
+            optional=True,
         )
     # Having a valid icon.svg file is not enough on its own: unless the charm
     # uses the `charm` plugin (which bundles icon.svg automatically), the icon
@@ -906,13 +989,20 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
     data = _get_charmcraft_yaml(repo_dir)
     if data is not None and not _icon_included_in_build(data):
         return CheckResult(
-            name='charm_has_icon', passed=False, description=description, context=context
+            name='charm_has_icon',
+            passed=False,
+            description=description,
+            context=context,
+            checklist_id='charm-has-icon',
+            optional=True,
         )
     return CheckResult(
         name='charm_has_icon',
         passed=True,
         description=description.replace('* [ ]', '* [x]'),
         context=context,
+        checklist_id='charm-has-icon',
+        optional=True,
     )
 
 

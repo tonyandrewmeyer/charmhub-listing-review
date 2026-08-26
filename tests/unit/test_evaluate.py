@@ -249,6 +249,7 @@ config:
 def test_check_charm_name(charm_name, expected):
     result = evaluate.check_charm_name(charm_name)
     assert result.passed == expected
+    assert result.checklist_id == 'charm-name'
 
 
 def test_check_charm_name_text_matches_the_checklist_item():
@@ -282,6 +283,7 @@ def test_coding_conventions(mock_url_ok, status, expected):
     mock_url_ok.return_value = status
     result = evaluate.coding_conventions('url')
     assert result.passed == expected
+    assert result.checklist_id == 'best-practice-automated-ci'
     assert result.description.replace('* [x]', '* [ ]') == (
         '* [ ] The quality assurance pipeline of a charm should be automated '
         'using a continuous integration (CI) system.'
@@ -374,6 +376,7 @@ def test_security_doc(mock_url_ok, status, expected):
 def test_repository_name(url, charm_name, expected):
     result = evaluate.repository_name(url, charm_name)
     assert result.passed == expected
+    assert result.checklist_id == 'best-practice-repository-naming'
 
 
 def test_python_requires_version(tmp_path):
@@ -384,6 +387,7 @@ def test_python_requires_version(tmp_path):
     """)
     result = evaluate.python_requires_version(tmp_path)
     assert result.passed is True
+    assert result.checklist_id == 'best-practice-requires-python'
 
 
 def test_missing_python_requires_version(tmp_path):
@@ -394,6 +398,7 @@ def test_missing_python_requires_version(tmp_path):
     """)
     result = evaluate.python_requires_version(tmp_path)
     assert result.passed is False
+    assert result.checklist_id == 'best-practice-requires-python'
 
 
 @pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
@@ -402,12 +407,14 @@ def test_repo_has_lock_file(tmp_path, lock_file):
     (tmp_path / lock_file).write_text('lock')
     result = evaluate.repo_has_lock_file(tmp_path)
     assert result.passed is True
+    assert result.checklist_id == 'best-practice-commit-lock-file'
 
     tmp2 = tmp_path / 'no_repo'
     tmp2.mkdir()
     (tmp2 / 'pyproject.toml').write_text("[project]\nname = 'foo'\n")
     result = evaluate.repo_has_lock_file(tmp2)
     assert result.passed is False
+    assert result.checklist_id == 'best-practice-commit-lock-file'
 
 
 @pytest.mark.parametrize('lock_file', ['uv.lock', 'poetry.lock'])
@@ -416,6 +423,7 @@ def test_repo_has_lock_file_missing_pyproject(tmp_path, lock_file):
     (tmp_path / lock_file).write_text('lock')
     result = evaluate.repo_has_lock_file(tmp_path)
     assert result.passed is False
+    assert result.checklist_id == 'best-practice-commit-lock-file'
 
 
 def test_charm_has_icon(tmp_path):
@@ -423,6 +431,8 @@ def test_charm_has_icon(tmp_path):
     icon.write_text('<svg width="100" height="100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
     assert result.passed is True
+    assert result.checklist_id == 'charm-has-icon'
+    assert result.optional is True
 
     icon.write_text('<svg viewBox="0 0 100 100"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
@@ -431,6 +441,14 @@ def test_charm_has_icon(tmp_path):
     icon.write_text('<svg width="99" height="99"></svg>')
     result = evaluate.charm_has_icon(tmp_path)
     assert result.passed is False
+    assert result.optional is True
+
+
+def test_charm_has_icon_missing_is_optional(tmp_path):
+    """A missing icon is a recommendation, not a hard requirement."""
+    result = evaluate.charm_has_icon(tmp_path)
+    assert result.passed is False
+    assert result.optional is True
 
 
 @pytest.mark.parametrize(
@@ -672,3 +690,26 @@ def test_relations_includes_optional(tmp_path, yaml_content, expected_checked):
     charmcraft_yaml.write_text(yaml_content)
     result = evaluate.relations_includes_optional(tmp_path)
     assert result.passed == expected_checked
+    # Awaiting the canonical/charmcraft `:name:` PR before this maps to an ID.
+    assert result.checklist_id is None
+
+
+def test_charmcraft_tooling_runs_the_commands_in_the_charm(tmp_path):
+    """The profile commands run in the charm's directory, not the cwd.
+
+    Without an explicit cwd the tooling commands ran wherever the reviewer
+    happened to be, so a well-formed charm failed the check for reasons that
+    had nothing to do with the charm.
+    """
+    (tmp_path / 'tox.ini').write_text(
+        '[testenv:format]\ncommands = true\n'
+        '[testenv:lint]\ncommands = true\n'
+        '[testenv:unit]\ncommands = true\n'
+        '[testenv:integration]\ncommands = true\n'
+    )
+    with mock.patch('subprocess.check_output') as check_output:
+        result = evaluate.charmcraft_tooling(tmp_path)
+    assert result.passed
+    assert check_output.call_args_list
+    for call in check_output.call_args_list:
+        assert call.kwargs['cwd'] == tmp_path

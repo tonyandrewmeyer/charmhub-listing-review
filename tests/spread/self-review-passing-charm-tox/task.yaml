@@ -5,11 +5,12 @@ systems:
 execute: |
   pushd "${SPREAD_PATH}/${SPREAD_TASK}"
 
-  # Create a passing test charm fixture. The directory is named to match the
-  # repository-naming best practice (<charm name>-operator), since that check
-  # is scored against the repository URL's basename.
-  CHARM_PARENT_DIR=$(mktemp -d)
-  CHARM_DIR="$CHARM_PARENT_DIR/test-charm-operator"
+  # Create a passing test charm fixture. The directory name is the repository
+  # name as far as the repository_name check is concerned (it reads the last
+  # path segment of --repository), so a bare mktemp -d would fail a check that
+  # has nothing to do with the charm's contents.
+  CHARM_PARENT=$(mktemp -d)
+  CHARM_DIR="$CHARM_PARENT/test-charm-operator"
   bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing-tox
 
   # Run self-review pointing at the local file:// repo.
@@ -26,6 +27,10 @@ execute: |
 
   # File-based checks should pass.
   echo "$output" | MATCH "✅.*icon"
+
+  # Lock file and requires-python are "Best practices" items, checked against
+  # best-practices.txt fetched live from canonical/operator: these can fail
+  # because that file changed, not because this repo did.
   echo "$output" | MATCH "✅.*lock file" || echo "$output" | MATCH "✅.*committed to version control"
   echo "$output" | MATCH "✅.*requires-python"
 
@@ -36,4 +41,4 @@ execute: |
   echo "$output" | MATCH "0 failed"
 
 restore: |
-  rm -rf "${CHARM_PARENT_DIR:-}" 2>/dev/null || true
+  rm -rf "${CHARM_PARENT:-}" 2>/dev/null || true
