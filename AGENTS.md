@@ -54,7 +54,10 @@ Avoid using `head` and `tail` with these commands, as that masks issues.
 **`self_review.py`** - Console-friendly version of the evaluation for charm authors to run locally before submitting.
 
 ### Reviewer Assignment
-`reviewers.yaml` maps GitHub usernames to charming teams. The `assign_review()` function randomly selects a team, then a reviewer from that team.
+`reviewers.yaml` lists the GitHub usernames of managers eligible to be
+assigned a review. The `assign_review()` function randomly picks one of
+them; the assignee is then expected to delegate the actual review to
+someone in their team by mentioning them in a comment.
 
 ## Coding Standards
 

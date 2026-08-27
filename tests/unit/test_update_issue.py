@@ -29,14 +29,14 @@ from charmhub_listing_review.evaluate import CheckResult, EvaluationResult
 @mock.patch('subprocess.run')
 @mock.patch('yaml.safe_load')
 @mock.patch('pathlib.Path.open')
-def test_assign_review_multiple_teams(
+def test_assign_review_multiple_reviewers(
     mock_open, mock_yaml_load, mock_subprocess_run, mock_random_choice
 ):
     reviewers_yaml = {
         'reviewers': {
-            '@alice': {'team': 'team1'},
-            '@bob': {'team': 'team2'},
-            '@carol': {'team': 'team1'},
+            '@alice': {'name': 'Alice'},
+            '@bob': {'name': 'Bob'},
+            '@carol': {'name': 'Carol'},
         }
     }
     mock_yaml_load.return_value = reviewers_yaml
@@ -45,6 +45,7 @@ def test_assign_review_multiple_teams(
     mock_random_choice.return_value = '@bob'
     reviewer = update_issue.assign_review(42, pathlib.Path('reviewers.yaml'))
     assert reviewer == '@bob'
+    mock_random_choice.assert_called_once_with(['@alice', '@bob', '@carol'])
     mock_subprocess_run.assert_called_once_with(
         [
             'gh',
@@ -61,10 +62,10 @@ def test_assign_review_multiple_teams(
 @mock.patch('subprocess.run')
 @mock.patch('yaml.safe_load')
 @mock.patch('pathlib.Path.open')
-def test_assign_review_single_team(mock_open, mock_yaml_load, mock_subprocess_run):
+def test_assign_review_single_reviewer(mock_open, mock_yaml_load, mock_subprocess_run):
     reviewers_yaml = {
         'reviewers': {
-            '@alice': {'team': 'team1'},
+            '@alice': {'name': 'Alice'},
         }
     }
     mock_yaml_load.return_value = reviewers_yaml

@@ -225,10 +225,10 @@ def assign_review(
     dry_run: bool = False,
     repo: str | None = None,
 ):
-    """Assign the issue to a team.
+    """Assign the issue to a manager.
 
-    We assign the issue to a single person (generally the manager) from a
-    charming team. The expectation is that they will then delegate the actual
+    We assign the issue to a single person (generally the manager) from the
+    reviewers list. The expectation is that they will then delegate the actual
     review to a member of their team. The manager has overall responsibility for
     ensuring that the review is completed on time (with Charm Tech responsible
     for keeping the manager accountable).
@@ -241,12 +241,7 @@ def assign_review(
     with reviewers_file.open('r') as f:
         reviewers_data = yaml.safe_load(f)
     reviewers = reviewers_data['reviewers']
-    teams = [info['team'] for info in reviewers.values()]
-    team = random.choice(teams)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
-    # If there happen to be multiple people in a team, then randomly pick among
-    # them.
-    team_reviewers = [name for name, info in reviewers.items() if info['team'] == team]
-    reviewer = random.choice(team_reviewers)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
+    reviewer = random.choice(list(reviewers))  # ruff: ignore[suspicious-non-cryptographic-random-usage]
 
     if not dry_run:
         cmd = ['gh', 'issue', 'edit', str(issue_number), '--add-assignee', reviewer[1:]]
