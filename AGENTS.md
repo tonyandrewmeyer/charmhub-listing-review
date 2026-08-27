@@ -47,11 +47,11 @@ Avoid using `head` and `tail` with these commands, as that masks issues.
 
 ### Core Modules
 
-**`evaluate.py`** - Automated charm evaluation against listing criteria. Functions clone the charm repo, check `charmcraft.yaml`, validate naming conventions, verify URLs, and return Markdown checklist items (ticked/unticked based on pass/fail).
+**`src/charmhub_listing_review/evaluate.py`** - Automated charm evaluation against listing criteria. Functions clone the charm repo, check `charmcraft.yaml`, validate naming conventions, verify URLs, and return Markdown checklist items (ticked/unticked based on pass/fail).
 
-**`update_issue.py`** - GitHub issue management. Extracts data from listing request issues, generates reviewer checklists (including best practices fetched from canonical/operator), assigns reviewers from `reviewers.yaml`, and posts/updates comments via `gh` CLI.
+**`src/charmhub_listing_review/update_issue.py`** - GitHub issue management. Extracts data from listing request issues, generates reviewer checklists (including best practices fetched from canonical/operator), assigns reviewers from `reviewers.yaml`, and posts/updates comments via `gh` CLI.
 
-**`self_review.py`** - Console-friendly version of the evaluation for charm authors to run locally before submitting.
+**`src/charmhub_listing_review/self_review.py`** - Console-friendly version of the evaluation for charm authors to run locally before submitting.
 
 ### Reviewer Assignment
 `reviewers.yaml` maps GitHub usernames to charming teams. The `assign_review()` function randomly selects a team, then a reviewer from that team.
