@@ -5,10 +5,11 @@ systems:
 execute: |
   pushd "${SPREAD_PATH}/${SPREAD_TASK}"
 
-  # Create a passing test charm fixture. The directory name is the repository
-  # name as far as the repository_name check is concerned (it reads the last
-  # path segment of --repository), so a bare mktemp -d would fail a check that
-  # has nothing to do with the charm's contents.
+  # Create a passing test charm fixture.
+  # The directory name is the repository name as far as the repository_name
+  # check is concerned (it reads the last path segment of --repository), so a
+  # bare mktemp -d would fail a check that has nothing to do with the charm's
+  # contents.
   CHARM_PARENT=$(mktemp -d)
   CHARM_DIR="$CHARM_PARENT/test-charm-operator"
   bash "$SPREAD_PATH"/tests/spread/lib/create-test-charm.sh "$CHARM_DIR" passing-tox
@@ -28,9 +29,11 @@ execute: |
   # File-based checks should pass.
   echo "$output" | MATCH "✅.*icon"
 
-  # Lock file and requires-python are "Best practices" items, checked against
-  # best-practices.txt fetched live from canonical/operator: these can fail
-  # because that file changed, not because this repo did.
+  # Lock file and requires-python are "Best practices" items fetched live from
+  # canonical/operator's best-practices.txt. They used to stay at manual review
+  # because the fetched text carried no id the matcher could key off; the :name:
+  # anchors from canonical/operator#2524 landed 2026-08-16 and this branch parses
+  # them, so both now resolve for real. A well-formed charm ticks them.
   echo "$output" | MATCH "✅.*lock file" || echo "$output" | MATCH "✅.*committed to version control"
   echo "$output" | MATCH "✅.*requires-python"
 
