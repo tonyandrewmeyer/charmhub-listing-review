@@ -50,11 +50,13 @@ from __future__ import annotations
 import ast
 import dataclasses
 import pathlib
+import re
 from collections.abc import Callable
 from typing import Any
 
 import yaml
 
+from . import _workflows
 from ._models import ItemAssessment, Verdict
 
 # Vendored charm libraries live here. They are third-party code that the charm
@@ -461,4 +463,202 @@ safe_subprocess = ItemCheck(
 )
 
 
-ITEM_CHECKS: dict[str, ItemCheck] = {check.checklist_id: check for check in (safe_subprocess,)}
+# --- ci-automated-releasing ---------------------------------------------------
+
+# Shell commands that publish a charm.
+_RELEASE_COMMANDS = (
+    re.compile(r'\bcharmcraft\s+upload\b'),
+    re.compile(r'\bcharmcraft\s+release\b'),
+    re.compile(r'\bcharmcraft\s+upload-resource\b'),
+)
+
+# Reusable workflows and actions that publish a charm on the caller's behalf.
+# Teams name these both ways round (`charm-release.yaml` in
+# canonical/observability, `release-charm.yaml` in charming-actions) and some
+# publish the charm as one of several artefacts (`publish-artifacts.yml` in
+# canonical/charm-ci), so matching only one spelling misses real releases.
+_RELEASE_ACTIONS = (
+    re.compile(r'charming-actions/(upload|release)-charm'),
+    re.compile(r'/(release|publish|upload)[_-]charm\.ya?ml'),
+    re.compile(r'/charm[_-](release|publish|upload)\.ya?ml'),
+    re.compile(r'/publish[_-]artifacts?\.ya?ml'),
+)
+
+# Channel risk levels that are not `stable`, per the checklist's "unstable
+# channels" wording.
+_UNSTABLE_CHANNELS = frozenset({'edge', 'beta', 'candidate'})
+
+
+@dataclasses.dataclass
+class _ReleaseWorkflow:
+    """A workflow that publishes the charm, and when it runs."""
+
+    path: str
+    triggers: str
+    default_branch_push: bool
+    how: str
+    """The step or ``uses:`` that does the publishing."""
+
+    channels: list[str] = dataclasses.field(default_factory=list)
+    """Literal channel names found. Empty when they are all expressions."""
+
+    caveats: list[str] = dataclasses.field(default_factory=list)
+
+
+def _literal_channels(workflow: _workflows.Workflow) -> list[str]:
+    """Channel names visible in the workflow, ignoring ``${{ }}`` expressions."""
+    text = yaml.safe_dump(workflow.jobs, default_flow_style=False)
+    found: list[str] = []
+    pattern = r'(?:channel:|--channel[= ]|--release[= ])\s*([A-Za-z0-9._/-]+)'
+    for match in re.finditer(pattern, text):
+        value = match.group(1)
+        if '${{' in value or not value:
+            continue
+        # A channel is `track/risk` or just `risk`.
+        found.append(value.split('/')[-1])
+    return sorted(set(found))
+
+
+def gather_release_workflows(source: CharmSource) -> Evidence:
+    """Find the workflows that publish the charm, and when they run."""
+    workflows = _workflows.load_workflows(source.repo)
+    summaries = _workflows.resolve_triggers(workflows, source.default_branch)
+
+    releases: list[_ReleaseWorkflow] = []
+    opaque: list[str] = []
+    unreadable = [w.path for w in workflows if w.unreadable]
+    for workflow in workflows:
+        how = ''
+        for location, command in _workflows.step_commands(workflow):
+            if _workflows.matches_any(command, _RELEASE_COMMANDS):
+                how = f'{location} runs `{command}`'
+                break
+        unrecognised: list[str] = []
+        if not how:
+            for job_id, uses in _workflows.iter_external_uses(workflow):
+                if _workflows.matches_any(uses, _RELEASE_ACTIONS):
+                    how = f'{workflow.path} ({job_id}) uses {uses.split("@")[0]}'
+                    break
+                unrecognised.append(f'{workflow.path} ({job_id}) calls {uses.split("@")[0]}')
+        if not how:
+            # A reusable workflow from another repository may publish the charm
+            # without saying so in its name. That is not evidence of absence.
+            opaque.extend(unrecognised)
+            continue
+        summary = summaries[workflow.path]
+        releases.append(
+            _ReleaseWorkflow(
+                path=workflow.path,
+                triggers=_workflows.describe_triggers(summary),
+                default_branch_push=summary.default_branch_push,
+                how=how,
+                channels=_literal_channels(workflow),
+                caveats=list(summary.caveats),
+            )
+        )
+
+    lines = [f'{release.path}: {release.how}; runs on {release.triggers}' for release in releases]
+    lines.extend(f'{path}: could not be parsed as YAML' for path in unreadable)
+    if not releases:
+        lines.extend(f'{entry}, whose contents are in another repository' for entry in opaque)
+    return Evidence(
+        lines=lines,
+        data={
+            'releases': releases,
+            'opaque': opaque,
+            'workflow_count': len(workflows),
+            'unreadable': unreadable,
+        },
+    )
+
+
+def decide_automated_releasing(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether releasing to an unstable channel is automated."""
+    checklist_id = 'ci-automated-releasing'
+    releases: list[_ReleaseWorkflow] = evidence.data.get('releases', [])
+    workflow_count: int = evidence.data.get('workflow_count', 0)
+
+    opaque: list[str] = evidence.data.get('opaque', [])
+
+    if not releases:
+        if opaque:
+            # Naming a reusable workflow is not reading it: this is undecidable
+            # from the repository, not a decided absence.
+            return ItemAssessment(
+                checklist_id=checklist_id,
+                verdict=Verdict.NEEDS_HUMAN,
+                rationale=(
+                    f'No workflow in this repository publishes the charm, but {len(opaque)} '
+                    f'job(s) call reusable workflows in other repositories that might.'
+                ),
+                evidence=evidence.lines,
+            )
+        rationale = (
+            'No workflow publishes the charm.'
+            if workflow_count
+            else 'The repository has no GitHub Actions workflows.'
+        )
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=rationale,
+            evidence=evidence.lines,
+        )
+
+    automatic = [release for release in releases if release.default_branch_push]
+    if not automatic:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'{len(releases)} workflow(s) publish the charm, but none runs on a push to '
+                f'the default branch, so releasing is triggered by hand or from elsewhere.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    known = {channel for release in automatic for channel in release.channels}
+    if known and not (known & _UNSTABLE_CHANNELS):
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'Releasing runs on the default branch, but the only channel(s) named are '
+                f'{", ".join(sorted(known))}, which are not unstable channels.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    caveats = [caveat for release in automatic for caveat in release.caveats]
+    if caveats:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'Releasing runs on the default branch, but not for every change: {caveats[0]}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=f'{automatic[0].path} publishes the charm on every push to the default branch.',
+        evidence=evidence.lines,
+    )
+
+
+automated_releasing = ItemCheck(
+    checklist_id='ci-automated-releasing',
+    gather=gather_release_workflows,
+    decide=decide_automated_releasing,
+)
+
+
+ITEM_CHECKS: dict[str, ItemCheck] = {
+    check.checklist_id: check
+    for check in (
+        safe_subprocess,
+        automated_releasing,
+    )
+}

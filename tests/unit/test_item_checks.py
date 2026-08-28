@@ -24,6 +24,7 @@ from charmhub_listing_review.item_checks import (
     CharmSource,
     Evidence,
     ItemCheck,
+    automated_releasing,
     first_party_python_files,
     safe_subprocess,
 )
@@ -267,3 +268,205 @@ class TestUnreadInputsCapTheVerdict:
         assessment = check.assess(CharmSource(charm_path=tmp_path))
         assert assessment.verdict is Verdict.PASS
         assert assessment.rationale == 'The charm is fine.'
+
+
+def _source(tmp_path: pathlib.Path, charm_name: str = 'my-charm', **files: str) -> CharmSource:
+    return CharmSource(charm_path=_charm(tmp_path, **files), charm_name=charm_name)
+
+
+_RELEASE_ON_PUSH = """
+name: Release
+on:
+  push:
+    branches: [main]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - run: charmcraft upload --release edge my.charm
+"""
+
+_INTEGRATION_ON_PUSH = """
+name: Integration
+on:
+  push:
+    branches: [main]
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - run: tox -e integration
+"""
+
+
+class TestAutomatedReleasing:
+    def test_no_workflows_at_all_fails(self, tmp_path: pathlib.Path):
+        assessment = automated_releasing.assess(_source(tmp_path))
+        assert assessment.verdict is Verdict.FAIL
+        assert 'no GitHub Actions workflows' in assessment.rationale
+
+    def test_publishing_on_default_branch_push_passes(self, tmp_path: pathlib.Path):
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': _RELEASE_ON_PUSH})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_workflows_that_never_publish_fail(self, tmp_path: pathlib.Path):
+        workflow = _RELEASE_ON_PUSH.replace('charmcraft upload --release edge my.charm', 'tox')
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/ci.yaml': workflow})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'No workflow publishes' in assessment.rationale
+
+    def test_manual_dispatch_only_is_a_judgement_call(self, tmp_path: pathlib.Path):
+        """Releasing may be driven from outside GitHub, as a Launchpad mirror is."""
+        workflow = _RELEASE_ON_PUSH.replace('push:\n    branches: [main]', 'workflow_dispatch:')
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': workflow})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'none runs on a push to the default branch' in assessment.rationale
+
+    def test_a_reusable_workflow_counts_as_publishing(self, tmp_path: pathlib.Path):
+        workflow = """
+on:
+  push:
+    branches: [main]
+jobs:
+  release:
+    uses: canonical/charming-actions/.github/workflows/release-charm.yaml@2.7.0
+"""
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': workflow})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_publishing_only_to_stable_is_not_an_unstable_release(self, tmp_path: pathlib.Path):
+        workflow = _RELEASE_ON_PUSH.replace('--release edge', '--release stable')
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': workflow})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'not unstable channels' in assessment.rationale
+
+    def test_a_path_filter_means_not_every_change(self, tmp_path: pathlib.Path):
+        workflow = _RELEASE_ON_PUSH.replace(
+            'branches: [main]', "branches: [main]\n    paths: ['src/**']"
+        )
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': workflow})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'paths filter' in assessment.rationale
+
+    def test_a_reusable_workflow_inherits_its_callers_triggers(self, tmp_path: pathlib.Path):
+        """`workflow_call` has no triggers of its own; the caller's decide it."""
+        called = """
+on:
+  workflow_call:
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - run: charmcraft upload --release edge my.charm
+"""
+        caller = """
+on:
+  push:
+    branches: [main]
+jobs:
+  call:
+    uses: ./.github/workflows/release.yaml
+"""
+        assessment = automated_releasing.assess(
+            _source(
+                tmp_path,
+                **{
+                    '.github/workflows/release.yaml': called,
+                    '.github/workflows/ci.yaml': caller,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_an_uncalled_reusable_workflow_never_runs(self, tmp_path: pathlib.Path):
+        called = """
+on:
+  workflow_call:
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - run: charmcraft upload --release edge my.charm
+"""
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': called})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_quoted_and_shorthand_on_keys_are_both_read(self, tmp_path: pathlib.Path):
+        """YAML 1.1 turns an unquoted `on` into the boolean True."""
+        quoted = _RELEASE_ON_PUSH.replace('on:\n  push:\n    branches: [main]', "'on':\n  push:")
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': quoted})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_an_unrecognised_reusable_workflow_is_not_evidence_of_absence(
+        self, tmp_path: pathlib.Path
+    ):
+        """A workflow in another repository may publish without saying so."""
+        workflow = """
+on:
+  push:
+    branches: [main]
+jobs:
+  ci:
+    uses: canonical/charm-ci/.github/workflows/do-everything.yml@v1
+"""
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/ci.yaml': workflow})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'reusable workflows in other repositories' in assessment.rationale
+
+    def test_publishing_reusable_workflows_are_named_both_ways_round(self, tmp_path: pathlib.Path):
+        """`charm-release.yaml` and `publish-artifacts.yml` both publish."""
+        for name in (
+            'canonical/observability/.github/workflows/charm-release.yaml@v2',
+            'canonical/charm-ci/.github/workflows/publish-artifacts.yml@v1',
+        ):
+            workflow = f'on:\n  push:\n    branches: [main]\njobs:\n  r:\n    uses: {name}\n'
+            assessment = automated_releasing.assess(
+                _source(tmp_path, **{'.github/workflows/release.yaml': workflow})
+            )
+            assert assessment.verdict is Verdict.PASS, name
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['ci-automated-releasing'] is automated_releasing
+
+
+class TestCharmSource:
+    def test_the_repository_root_defaults_to_the_charm_directory(self, tmp_path: pathlib.Path):
+        source = CharmSource(charm_path=tmp_path)
+        assert source.repo == tmp_path
+
+    def test_a_monorepo_keeps_workflows_above_the_charm(self, tmp_path: pathlib.Path):
+        """The charm is in a subdirectory; `.github` stays at the repository root."""
+        _charm(
+            tmp_path,
+            **{
+                '.github/workflows/release.yaml': _RELEASE_ON_PUSH,
+                'charms/my-charm/charmcraft.yaml': 'name: my-charm\n',
+            },
+        )
+        source = CharmSource(
+            charm_path=tmp_path / 'charms' / 'my-charm',
+            repo_path=tmp_path,
+            charm_name='my-charm',
+        )
+        assert automated_releasing.assess(source).verdict is Verdict.PASS
+        # Without the repository root, the workflows are invisible.
+        charm_only = CharmSource(charm_path=tmp_path / 'charms' / 'my-charm')
+        assert automated_releasing.assess(charm_only).verdict is Verdict.FAIL
