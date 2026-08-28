@@ -655,10 +655,331 @@ automated_releasing = ItemCheck(
 )
 
 
+# --- ci-integration-tests -----------------------------------------------------
+
+# Shell commands that run an integration suite.
+_INTEGRATION_COMMANDS = (
+    re.compile(r'\bcharmcraft\s+test\b'),
+    # `\b-e` would never match: there is no word boundary between a space and
+    # a hyphen, so the boundary has to go on the other side.
+    re.compile(r'\btox\b.*\s-e\s+\S*integration'),
+    re.compile(r'\bpytest\b.*integration'),
+    re.compile(r'\bmake\s+integration\b'),
+    re.compile(r'\bspread\b'),
+)
+
+# The checklist excludes tracing endpoints from the coverage requirement.
+_EXCLUDED_INTERFACES = frozenset({'tracing'})
+
+# Marks the interpolated part of an f-string, so that `f'{APP}:database'` can
+# be told apart from a literal `'other-app:database'`.
+_PLACEHOLDER = '\x00'
+
+# The calls that wire two endpoints together. `integrate` is jubilant's and
+# modern python-libjuju's; `add_relation` is what pytest-operator suites use
+# (`ops_test.model.add_relation`), and is still the more common of the two in
+# charms with an established integration suite; `relate` is the older alias.
+_INTEGRATE_FUNCTIONS = frozenset({'integrate', 'add_relation', 'relate'})
+
+# Suffixes that distinguish a charm's package name from the application name
+# tests deploy it under: `grafana-k8s` is deployed as `grafana`.
+_CHARM_NAME_SUFFIXES = ('-k8s', '-operator', '-machine')
+
+
+def _declared_endpoints(charmcraft: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    """Return ``{endpoint: role}`` and the endpoints excluded as tracing."""
+    endpoints: dict[str, str] = {}
+    excluded: list[str] = []
+    for role in ('provides', 'requires'):
+        block = charmcraft.get(role)
+        if not isinstance(block, dict):
+            continue
+        for name, definition in block.items():
+            interface = ''
+            if isinstance(definition, dict):
+                interface = str(definition.get('interface') or '')
+            if interface in _EXCLUDED_INTERFACES:
+                excluded.append(f'{name} ({interface})')
+                continue
+            endpoints[str(name)] = role
+    return endpoints, excluded
+
+
+def _integration_test_files(charm_path: pathlib.Path) -> list[pathlib.Path]:
+    """Python files under a directory named ``integration``."""
+    return sorted(
+        path
+        for path in charm_path.rglob('*.py')
+        if 'integration' in path.relative_to(charm_path).parts
+    )
+
+
+def _literal_text(node: ast.AST) -> str | None:
+    """Render a string literal or f-string, marking interpolated parts."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            else:
+                parts.append(_PLACEHOLDER)
+        return ''.join(parts)
+    return None
+
+
+def _names_this_charm(application: str, charm_name: str) -> bool:
+    """Is ``application`` the charm under test, on the left of an endpoint?
+
+    Three spellings all mean the charm under test, and all three are common:
+
+    * interpolated - the suite holds its name in a variable (``APP_NAME``) and
+      hard-codes the applications it integrates with;
+    * the charm's own name;
+    * the charm's name without its packaging suffix - ``grafana-k8s`` is
+      deployed as ``grafana``, and its tests write ``'grafana:logging'``.
+
+    Requiring an exact match instead reports a charm with a thorough suite as
+    covering almost none of its endpoints. This is only ever consulted for an
+    endpoint the charm itself declares, which bounds how wrong the last case
+    can be.
+    """
+    if _PLACEHOLDER in application:
+        return True
+
+    def stem(name: str) -> str:
+        name = name.strip().lower()
+        for suffix in _CHARM_NAME_SUFFIXES:
+            name = name.removesuffix(suffix)
+        return name
+
+    return bool(charm_name) and stem(application) == stem(charm_name)
+
+
+class _IntegrateVisitor(ast.NodeVisitor):
+    """Collect the endpoints of this charm that ``integrate()`` calls name."""
+
+    def __init__(self, relative_path: str, charm_name: str, endpoints: set[str]):
+        self._path = relative_path
+        self._charm_name = charm_name
+        self._endpoints = endpoints
+        self.covered: dict[str, str] = {}
+        """endpoint -> ``path:lineno`` of the call that integrates it."""
+
+        self.unattributed: list[str] = []
+        """Calls whose endpoint could not be read."""
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, 'id', '')
+        if name in _INTEGRATE_FUNCTIONS:
+            location = f'{self._path}:{getattr(node, "lineno", 0)}'
+            for argument in node.args:
+                self._record(location, argument)
+        self.generic_visit(node)
+
+    def _record(self, location: str, argument: ast.expr) -> None:
+        text = _literal_text(argument)
+        if text is None:
+            self.unattributed.append(f'{location}: endpoint is not a literal')
+            return
+        if ':' not in text:
+            # `integrate('other-app')` names an application, not an endpoint.
+            return
+        application, endpoint = text.rsplit(':', 1)
+        if _PLACEHOLDER in endpoint:
+            self.unattributed.append(f'{location}: the endpoint name is interpolated')
+            return
+        if endpoint not in self._endpoints:
+            return
+        if not _names_this_charm(application, self._charm_name):
+            return
+        self.covered.setdefault(endpoint, location)
+
+
+def gather_integration_tests(source: CharmSource) -> Evidence:
+    """Collect the integration suite, its CI triggers, and endpoint coverage."""
+    charmcraft = source.charmcraft_yaml()
+    charm_name = source.charm_name or str(charmcraft.get('name') or '')
+    endpoints, excluded = _declared_endpoints(charmcraft)
+
+    workflows = _workflows.load_workflows(source.repo)
+    summaries = _workflows.resolve_triggers(workflows, source.default_branch)
+    running: list[dict[str, Any]] = []
+    opaque: list[str] = []
+    for workflow in workflows:
+        how = ''
+        for location, command in _workflows.step_commands(workflow):
+            if _workflows.matches_any(command, _INTEGRATION_COMMANDS):
+                how = f'{location} runs `{command}`'
+                break
+        if not how:
+            for job_id, uses in _workflows.iter_external_uses(workflow):
+                opaque.append(f'{workflow.path} ({job_id}) calls {uses.split("@")[0]}')
+            continue
+        summary = summaries[workflow.path]
+        running.append({
+            'path': workflow.path,
+            'how': how,
+            'triggers': _workflows.describe_triggers(summary),
+            'default_branch_push': summary.default_branch_push,
+            'caveats': list(summary.caveats),
+        })
+
+    test_files = _integration_test_files(source.charm_path)
+    covered: dict[str, str] = {}
+    unattributed: list[str] = []
+    for path in test_files:
+        relative = path.relative_to(source.charm_path).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+        except (SyntaxError, ValueError):
+            unattributed.append(f'{relative}: could not be parsed')
+            continue
+        visitor = _IntegrateVisitor(relative, charm_name, set(endpoints))
+        visitor.visit(tree)
+        for endpoint, location in visitor.covered.items():
+            covered.setdefault(endpoint, location)
+        # Both arguments of one call can be unreadable for the same reason.
+        unattributed.extend(line for line in visitor.unattributed if line not in unattributed)
+
+    uncovered = sorted(set(endpoints) - set(covered))
+
+    lines = [f'{entry["path"]}: {entry["how"]}; runs on {entry["triggers"]}' for entry in running]
+    lines.extend(
+        f'{path.relative_to(source.charm_path).as_posix()}: integration tests'
+        for path in test_files
+    )
+    lines.extend(
+        f'{endpoint} ({endpoints[endpoint]}): integrated at {location}'
+        for endpoint, location in sorted(covered.items())
+    )
+    lines.extend(f'{endpoint} ({endpoints[endpoint]}): never integrated' for endpoint in uncovered)
+    lines.extend(f'{name}: excluded, tracing' for name in excluded)
+    lines.extend(unattributed)
+    lines.extend(f'{entry}, whose contents are in another repository' for entry in opaque)
+
+    return Evidence(
+        lines=lines,
+        data={
+            'running': running,
+            'test_files': [str(path) for path in test_files],
+            'endpoints': endpoints,
+            'covered': covered,
+            'uncovered': uncovered,
+            'unattributed': unattributed,
+            'opaque': opaque,
+        },
+    )
+
+
+def decide_integration_tests(evidence: Evidence) -> ItemAssessment:
+    """Rule on the integration suite: does it exist, run, and cover the endpoints?
+
+    This item is a conjunction of three clauses, and they fail independently:
+    a charm can have a well-triggered workflow and integrate two of its seven
+    endpoints. Each clause is therefore settled on its own and every settled
+    failure is reported, rather than returning on the first one - and a clause
+    that cannot be settled must not mask one that can. The reviewer gets the
+    whole list, not the first thing that went wrong.
+    """
+    checklist_id = 'ci-integration-tests'
+    running: list[dict[str, Any]] = evidence.data.get('running', [])
+    test_files: list[str] = evidence.data.get('test_files', [])
+    uncovered: list[str] = evidence.data.get('uncovered', [])
+    endpoints: dict[str, str] = evidence.data.get('endpoints', {})
+    opaque: list[str] = evidence.data.get('opaque', [])
+
+    if not test_files:
+        # Without a suite there is nothing for the other two clauses to be
+        # about, so this one short-circuits where the others do not.
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale='The charm has no integration tests.',
+            evidence=evidence.lines,
+        )
+
+    failures: list[str] = []
+    deferred: list[str] = []
+
+    automatic = [entry for entry in running if entry['default_branch_push']]
+    if running and not automatic:
+        failures.append(
+            'they are not run on changes to the default branch '
+            f'({running[0]["path"]} runs on {running[0]["triggers"]})'
+        )
+    elif not running and opaque:
+        deferred.append(
+            f'no workflow in this repository runs them, but {len(opaque)} job(s) call '
+            f'reusable workflows in other repositories that might'
+        )
+    elif not running:
+        failures.append('no workflow runs them')
+
+    caveats = [caveat for entry in automatic for caveat in entry['caveats']]
+    if caveats:
+        failures.append(f'they do not run on every change - {caveats[0]}')
+
+    unattributed: list[str] = evidence.data.get('unattributed', [])
+    if uncovered and not unattributed:
+        failures.append(
+            f'{len(uncovered)} of {len(endpoints)} endpoint(s) are never integrated '
+            f'({", ".join(uncovered)})'
+        )
+    elif uncovered:
+        # An endpoint is only *never* integrated if every call that could have
+        # integrated it was readable. A suite that builds endpoint names at
+        # runtime may well cover them, and reporting a failure on the strength
+        # of what could not be read is how a review tool loses its reviewer.
+        deferred.append(
+            f'{len(uncovered)} of {len(endpoints)} endpoint(s) were not seen integrated '
+            f'({", ".join(uncovered)}), but {len(unattributed)} call(s) name their endpoint '
+            f'in a way the check cannot read'
+        )
+
+    if failures:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=f'The charm has integration tests, but {"; and ".join(failures)}.',
+            evidence=evidence.lines,
+        )
+
+    # Nothing settled failed. What is left needs either a network call (are the
+    # runs green?) or a reading of each test (does integrating an endpoint
+    # actually exercise it?).
+    deferred.append(
+        'whether the runs are passing, and whether each test exercises the endpoint it '
+        'integrates rather than only declaring it, is not visible in the source'
+    )
+    if not endpoints:
+        coverage = 'and it declares no endpoints to cover'
+    elif uncovered:
+        coverage = f'integrating {len(endpoints) - len(uncovered)} of {len(endpoints)} endpoint(s)'
+    else:
+        coverage = f'covering all {len(endpoints)} endpoint(s)'
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=f'The charm has integration tests {coverage}; {"; and ".join(deferred)}.',
+        evidence=evidence.lines,
+    )
+
+
+integration_tests = ItemCheck(
+    checklist_id='ci-integration-tests',
+    gather=gather_integration_tests,
+    decide=decide_integration_tests,
+)
+
+
 ITEM_CHECKS: dict[str, ItemCheck] = {
     check.checklist_id: check
     for check in (
         safe_subprocess,
         automated_releasing,
+        integration_tests,
     )
 }

@@ -26,6 +26,7 @@ from charmhub_listing_review.item_checks import (
     ItemCheck,
     automated_releasing,
     first_party_python_files,
+    integration_tests,
     safe_subprocess,
 )
 
@@ -445,6 +446,215 @@ jobs:
 
     def test_registered_under_its_checklist_id(self):
         assert ITEM_CHECKS['ci-automated-releasing'] is automated_releasing
+
+
+_CHARMCRAFT_WITH_ENDPOINTS = """
+name: my-charm
+requires:
+  database:
+    interface: postgresql_client
+  logging:
+    interface: loki_push_api
+provides:
+  metrics-endpoint:
+    interface: prometheus_scrape
+"""
+
+
+class TestIntegrationTests:
+    def test_no_integration_tests_fails(self, tmp_path: pathlib.Path):
+        assessment = integration_tests.assess(
+            _source(tmp_path, **{'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'no integration tests' in assessment.rationale
+
+    def test_uncovered_endpoints_are_listed(self, tmp_path: pathlib.Path):
+        test = (
+            'APP = "my-charm"\n'
+            'def test_deploy(juju):\n'
+            '    juju.integrate(f"{APP}:database", "postgresql-k8s:database")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'logging, metrics-endpoint' in assessment.rationale
+
+    def test_another_applications_endpoint_is_not_this_charms_coverage(
+        self, tmp_path: pathlib.Path
+    ):
+        """`postgresql-k8s:database` is the other side of the integration."""
+        test = (
+            'def test_deploy(juju):\n'
+            '    juju.integrate("postgresql-k8s:database", "pgbouncer-k8s:backend-database")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'database' in assessment.rationale
+
+    def test_full_coverage_leaves_only_the_undecidable_tail(self, tmp_path: pathlib.Path):
+        test = (
+            'APP = "my-charm"\n'
+            'def test_deploy(juju):\n'
+            '    juju.integrate(f"{APP}:database", "postgresql-k8s:database")\n'
+            '    juju.integrate(f"{APP}:logging", "loki-k8s:logging")\n'
+            '    juju.integrate("my-charm:metrics-endpoint", "prometheus-k8s:metrics-endpoint")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'whether the runs are passing' in assessment.rationale
+
+    def test_tracing_endpoints_are_excluded(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\nrequires:\n'
+            '  charm-tracing:\n    interface: tracing\n'
+            '  database:\n    interface: postgresql_client\n'
+        )
+        test = (
+            'APP = "my-charm"\n'
+            'def test_deploy(juju):\n'
+            '    juju.integrate(f"{APP}:database", "postgresql-k8s:database")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': charmcraft,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_tests_that_never_run_on_the_default_branch_fail(self, tmp_path: pathlib.Path):
+        workflow = _INTEGRATION_ON_PUSH.replace(
+            'push:\n    branches: [main]', 'workflow_dispatch:'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': 'name: my-charm\n',
+                    '.github/workflows/ci.yaml': workflow,
+                    'tests/integration/test_charm.py': 'def test_deploy(juju): pass\n',
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'not run on changes to the default branch' in assessment.rationale
+
+    def test_an_undecidable_clause_does_not_mask_a_decided_one(self, tmp_path: pathlib.Path):
+        """Opaque CI is not knowable; uncovered endpoints are, and must be reported."""
+        opaque = """
+on:
+  push:
+    branches: [main]
+jobs:
+  ci:
+    uses: canonical/some-actions/.github/workflows/everything.yaml@v1
+"""
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': opaque,
+                    'tests/integration/test_charm.py': 'def test_deploy(juju): pass\n',
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'never integrated' in assessment.rationale
+
+    def test_pytest_operator_suites_wire_relations_with_add_relation(self, tmp_path: pathlib.Path):
+        """`ops_test.model.add_relation` is still the more common spelling."""
+        test = (
+            'async def test_deploy(ops_test):\n'
+            '    await ops_test.model.add_relation("my-charm:database", "postgresql-k8s")\n'
+            '    await ops_test.model.add_relation("my-charm:logging", "loki-k8s")\n'
+            '    await ops_test.model.add_relation("my-charm:metrics-endpoint", "prometheus")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'covering all 3 endpoint(s)' in assessment.rationale
+
+    def test_the_charm_is_recognised_without_its_packaging_suffix(self, tmp_path: pathlib.Path):
+        """`grafana-k8s` is deployed, and written in tests, as `grafana`."""
+        charmcraft = _CHARMCRAFT_WITH_ENDPOINTS.replace('name: my-charm', 'name: my-charm-k8s')
+        test = (
+            'def test_deploy(juju):\n'
+            '    juju.integrate("my-charm:database", "postgresql-k8s:database")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                'my-charm-k8s',
+                **{
+                    'charmcraft.yaml': charmcraft,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert 'database' not in assessment.rationale
+
+    def test_unreadable_calls_stop_uncovered_being_a_failure(self, tmp_path: pathlib.Path):
+        """ "Never integrated" is only true if every call could be read."""
+        test = (
+            'def test_deploy(juju, endpoint):\n'
+            '    juju.integrate(f"my-charm:{endpoint}", "other")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'were not seen integrated' in assessment.rationale
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['ci-integration-tests'] is integration_tests
 
 
 class TestCharmSource:
