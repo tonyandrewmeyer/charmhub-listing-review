@@ -26,6 +26,8 @@ from charmhub_listing_review.item_checks import (
     ItemCheck,
     action_additional_properties,
     automated_releasing,
+    avoid_charm_plugin,
+    dependency_update_tooling,
     first_party_python_files,
     integration_tests,
     no_duplicate_model_config,
@@ -854,3 +856,125 @@ class TestActionAdditionalProperties:
         assert (
             ITEM_CHECKS['charmcraft-actions-additional-properties'] is action_additional_properties
         )
+
+
+class TestDependencyUpdateTooling:
+    def test_no_config_fails(self, tmp_path: pathlib.Path):
+        assessment = dependency_update_tooling.assess(_source(tmp_path))
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_dependabot_config_passes(self, tmp_path: pathlib.Path):
+        assessment = dependency_update_tooling.assess(
+            _source(tmp_path, **{'.github/dependabot.yml': 'version: 2\n'})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    @pytest.mark.parametrize(
+        'path',
+        [
+            'renovate.json',
+            'renovate.json5',
+            '.github/renovate.json',
+            '.github/renovate.json5',
+            '.gitlab/renovate.json',
+            '.renovaterc',
+            '.renovaterc.json',
+        ],
+    )
+    def test_renovate_config_at_any_recognised_location_passes(
+        self, tmp_path: pathlib.Path, path: str
+    ):
+        assessment = dependency_update_tooling.assess(_source(tmp_path, **{path: '{}\n'}))
+        assert assessment.verdict is Verdict.PASS
+
+    def test_renovate_section_in_package_json_passes(self, tmp_path: pathlib.Path):
+        assessment = dependency_update_tooling.assess(
+            _source(tmp_path, **{'package.json': '{"name": "x", "renovate": {}}\n'})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_package_json_without_a_renovate_section_does_not_count(self, tmp_path: pathlib.Path):
+        assessment = dependency_update_tooling.assess(
+            _source(tmp_path, **{'package.json': '{"name": "x"}\n'})
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_monorepo_reads_the_repository_root_not_the_charm_directory(
+        self, tmp_path: pathlib.Path
+    ):
+        _charm(
+            tmp_path,
+            **{
+                '.github/dependabot.yml': 'version: 2\n',
+                'charms/my-charm/charmcraft.yaml': 'name: my-charm\n',
+            },
+        )
+        source = CharmSource(charm_path=tmp_path / 'charms' / 'my-charm', repo_path=tmp_path)
+        assert dependency_update_tooling.assess(source).verdict is Verdict.PASS
+        charm_only = CharmSource(charm_path=tmp_path / 'charms' / 'my-charm')
+        assert dependency_update_tooling.assess(charm_only).verdict is Verdict.FAIL
+
+    def test_registered_under_its_checklist_id(self):
+        assert (
+            ITEM_CHECKS['best-practice-automated-dependency-updates'] is dependency_update_tooling
+        )
+
+
+class TestAvoidCharmPlugin:
+    def test_no_parts_declared_fails(self, tmp_path: pathlib.Path):
+        assessment = avoid_charm_plugin.assess(
+            _source(tmp_path, **{'charmcraft.yaml': 'name: my-charm\n'})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'default `charm` plugin' in assessment.rationale
+
+    def test_explicit_charm_plugin_fails(self, tmp_path: pathlib.Path):
+        charmcraft = 'name: my-charm\nparts:\n  charm:\n    plugin: charm\n'
+        assessment = avoid_charm_plugin.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_charm_plugin_inferred_from_the_part_name_fails(self, tmp_path: pathlib.Path):
+        """No `plugin` key: charmcraft infers it from the part's own name."""
+        charmcraft = 'name: my-charm\nparts:\n  charm:\n    source: .\n'
+        assessment = avoid_charm_plugin.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    @pytest.mark.parametrize('plugin', ['uv', 'poetry'])
+    def test_migrated_plugin_passes(self, tmp_path: pathlib.Path, plugin: str):
+        charmcraft = f'name: my-charm\nparts:\n  charm:\n    plugin: {plugin}\n'
+        assessment = avoid_charm_plugin.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_a_part_named_after_a_migrated_plugin_passes(self, tmp_path: pathlib.Path):
+        """A part with no `plugin` key named `uv` is inferred as the `uv` plugin."""
+        charmcraft = 'name: my-charm\nparts:\n  uv:\n    source: .\n'
+        assessment = avoid_charm_plugin.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_unrecognised_plugin_name_needs_a_human(self, tmp_path: pathlib.Path):
+        charmcraft = 'name: my-charm\nparts:\n  static-files:\n    plugin: dump\n'
+        assessment = avoid_charm_plugin.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+
+    def test_a_charm_plugin_part_fails_even_alongside_a_migrated_one(self, tmp_path: pathlib.Path):
+        """Mid-migration counts as still using the plugin the item says to avoid."""
+        charmcraft = (
+            'name: my-charm\nparts:\n  charm:\n    plugin: charm\n  extra:\n    plugin: uv\n'
+        )
+        assessment = avoid_charm_plugin.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['best-practice-avoid-charm-plugin'] is avoid_charm_plugin
