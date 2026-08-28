@@ -936,6 +936,15 @@ def charm_has_icon(repo_dir: pathlib.Path) -> CheckResult:
     )
 
 
+def effective_plugin(part: dict[Any, Any], name: str) -> str:
+    """The plugin that builds this part.
+
+    Charmcraft infers the plugin from the part's own name when no `plugin` key
+    is given.
+    """
+    return str(part.get('plugin', name))
+
+
 def _icon_included_in_build(charmcraft: dict[Any, Any]) -> bool:
     """Whether `icon.svg` will be packed into the charm.
 
@@ -950,8 +959,7 @@ def _icon_included_in_build(charmcraft: dict[Any, Any]) -> bool:
     for name, part in parts.items():
         if not isinstance(part, dict):
             continue
-        # charmcraft infers the plugin from the part name when it isn't given.
-        if part.get('plugin', name) == 'charm':
+        if effective_plugin(part, name) == 'charm':
             return True
         for key in ('stage', 'prime'):
             entries = part.get(key)
