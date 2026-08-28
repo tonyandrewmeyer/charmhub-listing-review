@@ -967,11 +967,246 @@ integration_tests = ItemCheck(
 )
 
 
+# --- best-practice-no-duplicate-model-config ----------------------------------
+
+# Model configuration keys, from
+# https://canonical.com/juju/docs/juju-cli/3.6/reference/configuration/list-of-model-configuration-keys
+# read 2026-07-28 against Juju 3.6. Juju adds keys occasionally; a key missing
+# from this list makes the check miss a duplicate, never invent one.
+MODEL_CONFIG_KEYS = frozenset({
+    'agent-metadata-url',
+    'agent-stream',
+    'agent-version',
+    'apt-ftp-proxy',
+    'apt-http-proxy',
+    'apt-https-proxy',
+    'apt-mirror',
+    'apt-no-proxy',
+    'automatically-retry-hooks',
+    'backup-dir',
+    'charmhub-url',
+    'cloudinit-userdata',
+    'container-image-metadata-defaults-disabled',
+    'container-image-metadata-url',
+    'container-image-stream',
+    'container-inherit-properties',
+    'container-networking-method',
+    'default-base',
+    'default-space',
+    'development',
+    'disable-network-management',
+    'disable-telemetry',
+    'egress-subnets',
+    'enable-os-refresh-update',
+    'enable-os-upgrade',
+    'fan-config',
+    'firewall-mode',
+    'ftp-proxy',
+    'http-proxy',
+    'https-proxy',
+    'ignore-machine-addresses',
+    'image-metadata-defaults-disabled',
+    'image-metadata-url',
+    'image-stream',
+    'juju-ftp-proxy',
+    'juju-http-proxy',
+    'juju-https-proxy',
+    'juju-no-proxy',
+    'logforward-enabled',
+    'logging-config',
+    'logging-output',
+    'lxd-snap-channel',
+    'max-action-results-age',
+    'max-action-results-size',
+    'max-status-history-age',
+    'max-status-history-size',
+    'net-bond-reconfigure-delay',
+    'no-proxy',
+    'num-container-provision-workers',
+    'num-provision-workers',
+    'provisioner-harvest-mode',
+    'proxy-ssh',
+    'resource-tags',
+    'secret-backend',
+    'snap-http-proxy',
+    'snap-https-proxy',
+    'snap-store-assertions',
+    'snap-store-proxy',
+    'snap-store-proxy-url',
+    'ssl-hostname-verification',
+    'storage-default-block-source',
+    'storage-default-filesystem-source',
+    'transmit-vendor-metrics',
+    'update-status-hook-interval',
+})
+
+
+def _normalise_option(name: str) -> str:
+    """Charm options may use either separator, so compare without one."""
+    return name.strip().lower().replace('_', '-')
+
+
+def gather_config_options(source: CharmSource) -> Evidence:
+    """Collect the charm's config options and any model-config key they match."""
+    charmcraft = source.charmcraft_yaml()
+    config = charmcraft.get('config')
+    options = config.get('options') if isinstance(config, dict) else None
+    if not isinstance(options, dict):
+        options = {}
+
+    duplicates: list[tuple[str, str]] = []
+    others: list[str] = []
+    for name, definition in options.items():
+        normalised = _normalise_option(str(name))
+        if normalised in MODEL_CONFIG_KEYS:
+            duplicates.append((str(name), normalised))
+            continue
+        description = ''
+        if isinstance(definition, dict):
+            description = ' '.join(str(definition.get('description') or '').split())
+        others.append(f'{name}: {description}' if description else str(name))
+
+    lines = [
+        f'{name}: duplicates the `{key}` model configuration key'
+        for name, key in sorted(duplicates)
+    ]
+    return Evidence(
+        lines=lines or others,
+        data={'duplicates': duplicates, 'others': others, 'option_count': len(options)},
+    )
+
+
+def decide_no_duplicate_model_config(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether the charm re-exposes model-level configuration."""
+    checklist_id = 'best-practice-no-duplicate-model-config'
+    duplicates: list[tuple[str, str]] = evidence.data.get('duplicates', [])
+    others: list[str] = evidence.data.get('others', [])
+
+    if not evidence.data.get('option_count'):
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm defines no configuration options.',
+        )
+
+    if duplicates:
+        names = ', '.join(name for name, _ in sorted(duplicates))
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(duplicates)} configuration option(s) duplicate a `juju model-config` '
+                f'key: {names}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    # Name matching settles the duplicate-by-name case exactly, and that is the
+    # common one. What it cannot settle is an option that controls the same
+    # thing under a different name, which needs the descriptions read - so the
+    # options and their descriptions are what this hands on.
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.NEEDS_HUMAN,
+        rationale=(
+            f'None of the {len(others)} configuration option(s) share a name with a '
+            f'`juju model-config` key; whether any duplicates one under a different name '
+            f'needs their descriptions read.'
+        ),
+        evidence=evidence.lines,
+    )
+
+
+no_duplicate_model_config = ItemCheck(
+    checklist_id='best-practice-no-duplicate-model-config',
+    gather=gather_config_options,
+    decide=decide_no_duplicate_model_config,
+)
+
+
+# --- charmcraft-actions-additional-properties ----------------------------------
+
+# This item's evidence, unlike every other item in this module, is *not* one of
+# canonical/operator's best-practice admonitions - it is the `charmcraft.yaml`
+# file reference page, which lives in canonical/charmcraft's own documentation.
+# canonical/operator#2524 (the source of every other checklist_id here) only
+# adds `:name:` anchors to admonitions on operator's own howto pages, so this
+# bullet - like the `optional` key bullet `relations_includes_optional` already
+# covers - has no upstream anchor yet, from #2524 or anywhere else. The ID below
+# is this module's own placeholder, following the same `<key>-<slug>` shape the
+# charmcraft docs use for their internal ref targets (e.g.
+# `charmcraft-yaml-key-actions`), pending a charmcraft-side follow-up that adds
+# a real one.
+
+
+def gather_action_additional_properties(source: CharmSource) -> Evidence:
+    """Collect which of the charm's actions declare `additionalProperties`."""
+    charmcraft = source.charmcraft_yaml()
+    actions = charmcraft.get('actions')
+    if not isinstance(actions, dict):
+        actions = {}
+
+    missing: list[str] = []
+    present: list[str] = []
+    for name, definition in actions.items():
+        if isinstance(definition, dict) and 'additionalProperties' in definition:
+            present.append(str(name))
+        else:
+            missing.append(str(name))
+
+    lines = [f'{name}: missing `additionalProperties`' for name in sorted(missing)]
+    lines.extend(f'{name}: declares `additionalProperties`' for name in sorted(present))
+    return Evidence(
+        lines=lines,
+        data={'missing': missing, 'action_count': len(actions)},
+    )
+
+
+def decide_action_additional_properties(evidence: Evidence) -> ItemAssessment:
+    """Rule on whether every action declares `additionalProperties`."""
+    checklist_id = 'charmcraft-actions-additional-properties'
+    action_count: int = evidence.data.get('action_count', 0)
+    missing: list[str] = evidence.data.get('missing', [])
+
+    if not action_count:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.NOT_APPLICABLE,
+            rationale='The charm declares no actions.',
+        )
+
+    if missing:
+        return ItemAssessment(
+            checklist_id=checklist_id,
+            verdict=Verdict.FAIL,
+            rationale=(
+                f'{len(missing)} of {action_count} action(s) do not declare '
+                f'`additionalProperties`: {", ".join(sorted(missing))}.'
+            ),
+            evidence=evidence.lines,
+        )
+
+    return ItemAssessment(
+        checklist_id=checklist_id,
+        verdict=Verdict.PASS,
+        rationale=f'All {action_count} action(s) declare `additionalProperties`.',
+    )
+
+
+action_additional_properties = ItemCheck(
+    checklist_id='charmcraft-actions-additional-properties',
+    gather=gather_action_additional_properties,
+    decide=decide_action_additional_properties,
+)
+
+
 ITEM_CHECKS: dict[str, ItemCheck] = {
     check.checklist_id: check
     for check in (
         safe_subprocess,
         automated_releasing,
         integration_tests,
+        no_duplicate_model_config,
+        action_additional_properties,
     )
 }

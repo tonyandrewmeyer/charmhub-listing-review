@@ -22,9 +22,11 @@ from charmhub_listing_review._models import Verdict
 from charmhub_listing_review.item_checks import (
     ITEM_CHECKS,
     CharmSource,
+    action_additional_properties,
     automated_releasing,
     first_party_python_files,
     integration_tests,
+    no_duplicate_model_config,
     safe_subprocess,
 )
 
@@ -616,6 +618,40 @@ jobs:
         assert ITEM_CHECKS['ci-integration-tests'] is integration_tests
 
 
+class TestNoDuplicateModelConfig:
+    def test_no_options_does_not_apply(self, tmp_path: pathlib.Path):
+        assessment = no_duplicate_model_config.assess(
+            _source(tmp_path, **{'charmcraft.yaml': 'name: my-charm\n'})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_underscored_options_still_match_hyphenated_keys(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\nconfig:\n  options:\n'
+            '    http_proxy:\n      type: string\n'
+            '    https_proxy:\n      type: string\n'
+        )
+        assessment = no_duplicate_model_config.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'http_proxy, https_proxy' in assessment.rationale
+
+    def test_unrelated_options_leave_the_renamed_case_to_a_human(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\nconfig:\n  options:\n'
+            '    port:\n      type: int\n      description: The port to listen on.\n'
+        )
+        assessment = no_duplicate_model_config.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert assessment.evidence == ['port: The port to listen on.']
+
+    def test_registered_under_its_checklist_id(self):
+        assert ITEM_CHECKS['best-practice-no-duplicate-model-config'] is no_duplicate_model_config
+
+
 class TestCharmSource:
     def test_the_repository_root_defaults_to_the_charm_directory(self, tmp_path: pathlib.Path):
         source = CharmSource(charm_path=tmp_path)
@@ -639,3 +675,39 @@ class TestCharmSource:
         # Without the repository root, the workflows are invisible.
         charm_only = CharmSource(charm_path=tmp_path / 'charms' / 'my-charm')
         assert automated_releasing.assess(charm_only).verdict is Verdict.FAIL
+
+
+class TestActionAdditionalProperties:
+    def test_no_actions_is_not_applicable(self, tmp_path: pathlib.Path):
+        assessment = action_additional_properties.assess(
+            _source(tmp_path, **{'charmcraft.yaml': 'name: my-charm\n'})
+        )
+        assert assessment.verdict is Verdict.NOT_APPLICABLE
+
+    def test_missing_additional_properties_fails(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\nactions:\n'
+            '  snapshot:\n    description: Take a snapshot.\n'
+            '  restore:\n    description: Restore a snapshot.\n    additionalProperties: false\n'
+        )
+        assessment = action_additional_properties.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.FAIL
+        assert 'snapshot' in assessment.rationale
+        assert 'restore' not in assessment.rationale
+
+    def test_all_actions_declare_it_passes(self, tmp_path: pathlib.Path):
+        charmcraft = (
+            'name: my-charm\nactions:\n'
+            '  snapshot:\n    description: Take a snapshot.\n    additionalProperties: false\n'
+        )
+        assessment = action_additional_properties.assess(
+            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_registered_under_its_checklist_id(self):
+        assert (
+            ITEM_CHECKS['charmcraft-actions-additional-properties'] is action_additional_properties
+        )
