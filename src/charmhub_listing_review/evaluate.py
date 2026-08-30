@@ -243,6 +243,7 @@ def license_statement(license_url: str) -> CheckResult:
             passed=True,
             description=description.replace('* [ ]', '* [x]'),
             context=context,
+            checklist_id='doc-license-statement',
         )
     context['known_license'] = False
     # If it's another license, then let the reviewer decide if it's a license file.

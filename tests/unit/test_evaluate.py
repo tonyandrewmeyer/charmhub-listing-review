@@ -298,6 +298,7 @@ def test_license_statement_known_license(mock_fetch, license_hash):
         mock_hash.return_value.hexdigest.return_value = license_hash
         result = evaluate.license_statement('url')
         assert result.passed is True
+        assert result.checklist_id == 'doc-license-statement'
 
 
 @mock.patch('charmhub_listing_review.evaluate._fetch_url')
