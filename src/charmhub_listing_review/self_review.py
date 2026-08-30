@@ -40,6 +40,7 @@ from collections.abc import Generator
 
 from .ai_backend import resolve_backend
 from .ai_client import (
+    LLM_TIMEOUT_SECONDS,
     assess_documentation,
     assess_metadata,
     generate_summary,
@@ -224,7 +225,15 @@ def print_self_review_results(
         if results and backend is not None:
             try:
                 with _spinner('Generating AI review summary...'):
-                    ai_summary = asyncio.run(generate_summary(backend, charm_name, results))
+                    ai_summary = asyncio.run(
+                        generate_summary(backend, charm_name, results, charmcraft_data)
+                    )
+            except TimeoutError:
+                print(
+                    f'\n⚠️  Warning: AI review summary timed out after '
+                    f'{LLM_TIMEOUT_SECONDS} seconds. Re-run with --ai-backend none '
+                    'to skip the AI steps.'
+                )
             except Exception as e:
                 print(f'\n⚠️  Warning: AI review summary failed: {e}')
 
@@ -258,6 +267,12 @@ def print_self_review_results(
                 print('-' * 40)
                 print(strip_markdown_for_terminal(doc_assessment))
                 ai_output_shown = True
+        except TimeoutError:
+            print(
+                f'\n⚠️  Warning: AI documentation assessment timed out after '
+                f'{LLM_TIMEOUT_SECONDS} seconds. Re-run with --ai-backend none '
+                'to skip the AI steps.'
+            )
         except Exception as e:
             print(f'\n⚠️  Warning: AI documentation assessment failed: {e}')
 
@@ -270,6 +285,12 @@ def print_self_review_results(
                 print('-' * 40)
                 print(strip_markdown_for_terminal(meta_assessment))
                 ai_output_shown = True
+        except TimeoutError:
+            print(
+                f'\n⚠️  Warning: AI metadata assessment timed out after '
+                f'{LLM_TIMEOUT_SECONDS} seconds. Re-run with --ai-backend none '
+                'to skip the AI steps.'
+            )
         except Exception as e:
             print(f'\n⚠️  Warning: AI metadata assessment failed: {e}')
 

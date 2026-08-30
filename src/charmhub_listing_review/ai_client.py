@@ -34,7 +34,7 @@ if typing.TYPE_CHECKING:
     from .ai_backend import AIBackend
 
 # Timeout for individual LLM calls, in seconds.
-_LLM_TIMEOUT_SECONDS = 30
+LLM_TIMEOUT_SECONDS = 30
 
 # Maximum characters of context/metadata to send to the LLM, to limit token
 # usage from potentially large or malicious repository content.
@@ -182,7 +182,7 @@ async def generate_summary(
     try:
         raw = await asyncio.wait_for(
             backend.send_message(REVIEW_SUMMARY_SYSTEM_PROMPT, prompt),
-            timeout=_LLM_TIMEOUT_SECONDS,
+            timeout=LLM_TIMEOUT_SECONDS,
         )
         return _sanitise_ai_output_multiline(raw)
     finally:
@@ -251,7 +251,7 @@ async def assess_documentation(backend: AIBackend, doc_context: dict) -> str:
     try:
         raw = await asyncio.wait_for(
             backend.send_message(DOC_QUALITY_SYSTEM_PROMPT, '\n'.join(prompt_parts)),
-            timeout=_LLM_TIMEOUT_SECONDS,
+            timeout=LLM_TIMEOUT_SECONDS,
         )
         return _sanitise_ai_output_multiline(raw)
     finally:
@@ -287,7 +287,7 @@ async def assess_metadata(backend: AIBackend, charmcraft_data: dict) -> str:
     try:
         raw = await asyncio.wait_for(
             backend.send_message(METADATA_QUALITY_SYSTEM_PROMPT, prompt),
-            timeout=_LLM_TIMEOUT_SECONDS,
+            timeout=LLM_TIMEOUT_SECONDS,
         )
         return _sanitise_ai_output_multiline(raw)
     finally:
