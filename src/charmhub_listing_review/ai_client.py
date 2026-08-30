@@ -273,6 +273,7 @@ async def assess_metadata(backend: AIBackend, charmcraft_data: dict) -> str:
         value = charmcraft_data.get(field, '')
         if value:
             fields_text += f'{field}: {value}\n'
+    fields_text = fields_text[:_MAX_CONTEXT_CHARS]
 
     if not fields_text:
         return ''
