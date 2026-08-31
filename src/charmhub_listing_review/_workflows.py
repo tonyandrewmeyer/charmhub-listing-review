@@ -33,6 +33,7 @@ import dataclasses
 import fnmatch
 import pathlib
 import re
+from collections.abc import Iterator
 from typing import Any
 
 import yaml
@@ -106,7 +107,7 @@ def load_workflows(repo_path: pathlib.Path) -> list[Workflow]:
         relative = path.relative_to(repo_path).as_posix()
         try:
             data = yaml.safe_load(path.read_text(encoding='utf-8', errors='replace'))
-        except yaml.YAMLError as exc:
+        except (yaml.YAMLError, OSError) as exc:
             workflows.append(Workflow(path=relative, name=path.name, unreadable=str(exc)))
             continue
         if not isinstance(data, dict):
@@ -161,8 +162,7 @@ def _push_covers_default_branch(
         if any(_branch_matches(pattern, default_branch) for pattern in ignored):
             return False, ''
     elif _has_filter(filters, 'branches'):
-        branches = _as_list(filters['branches'])
-        if not any(_branch_matches(pattern, default_branch) for pattern in branches):
+        if not _branches_cover(_as_list(filters['branches']), default_branch):
             return False, ''
 
     for key in ('paths', 'paths-ignore'):
@@ -183,9 +183,29 @@ def _as_list(value: Any) -> list[str]:
     return []
 
 
+def _branches_cover(patterns: list[str], branch: str) -> bool:
+    """Does a ``branches:`` list fire for *branch*?
+
+    GitHub evaluates positive patterns first and then lets a ``!`` pattern
+    take a branch back out again, so ``['**', '!main']`` is the ordinary way
+    to write "every branch except the default one". Matching the whole list
+    positionally instead reads that as a match on `main`, which is a tick for
+    a workflow that GitHub never runs there.
+    """
+    positive = [pattern for pattern in patterns if not pattern.startswith('!')]
+    negative = [pattern[1:] for pattern in patterns if pattern.startswith('!')]
+    if not any(_branch_matches(pattern, branch) for pattern in positive):
+        return False
+    return not any(_branch_matches(pattern, branch) for pattern in negative)
+
+
 def _branch_matches(pattern: str, branch: str) -> bool:
     if pattern in _MATCH_ALL_BRANCHES:
         return True
+    # fnmatch's `*` matches a `/` and GitHub's does not, so a pattern like
+    # `release/*` is read more broadly here than GitHub reads it. That only
+    # matters for a default branch with a slash in its name, which is rare
+    # enough to leave alone.
     return fnmatch.fnmatchcase(branch, pattern)
 
 
@@ -266,7 +286,7 @@ def describe_triggers(summary: TriggerSummary) -> str:
     return events
 
 
-def iter_steps(workflow: Workflow):
+def iter_steps(workflow: Workflow) -> Iterator[tuple[str, dict[str, Any]]]:
     """Yield ``(job_id, step)`` for every step in the workflow."""
     for job_id, job in workflow.jobs.items():
         if not isinstance(job, dict):
@@ -279,7 +299,7 @@ def iter_steps(workflow: Workflow):
                 yield str(job_id), step
 
 
-def iter_external_uses(workflow: Workflow):
+def iter_external_uses(workflow: Workflow) -> Iterator[tuple[str, str]]:
     """Yield ``(job_id, uses)`` for reusable workflows from other repositories.
 
     Their contents are not in this repository, so anything they do - releasing
@@ -293,6 +313,28 @@ def iter_external_uses(workflow: Workflow):
             yield str(job_id), uses
 
 
+def _joined_lines(run: str) -> list[str]:
+    r"""Split a ``run:`` block into commands, honouring ``\\`` continuations.
+
+    Release workflows carry a lot of flags, so the invocation a consumer wants
+    to match (``charmcraft upload ... --release``) is routinely spread over
+    several lines. Splitting on newlines alone hands every consumer fragments
+    and makes them each solve this.
+    """
+    lines: list[str] = []
+    pending = ''
+    for raw in run.splitlines():
+        stripped = raw.strip()
+        if stripped.endswith('\\'):
+            pending += stripped[:-1].rstrip() + ' '
+            continue
+        lines.append((pending + stripped).strip())
+        pending = ''
+    if pending:
+        lines.append(pending.strip())
+    return lines
+
+
 def step_commands(workflow: Workflow) -> list[tuple[str, str]]:
     """Yield ``(location, command line)`` for every shell line the steps run."""
     commands: list[tuple[str, str]] = []
@@ -300,10 +342,10 @@ def step_commands(workflow: Workflow) -> list[tuple[str, str]]:
         run = step.get('run')
         if not isinstance(run, str):
             continue
-        for line in run.splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith('#'):
-                commands.append((f'{workflow.path} ({job_id})', stripped))
+        location = f'{workflow.path} ({job_id})'
+        commands.extend(
+            (location, line) for line in _joined_lines(run) if line and not line.startswith('#')
+        )
     return commands
 
 
