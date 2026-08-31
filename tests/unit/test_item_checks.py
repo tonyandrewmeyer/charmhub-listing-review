@@ -16,7 +16,15 @@
 
 import pathlib
 
-from charmhub_listing_review.item_checks import first_party_python_files
+import pytest
+
+from charmhub_listing_review._models import ItemAssessment, Verdict
+from charmhub_listing_review.item_checks import (
+    CharmSource,
+    Evidence,
+    ItemCheck,
+    first_party_python_files,
+)
 
 
 def _charm(tmp_path: pathlib.Path, **files: str) -> pathlib.Path:
@@ -59,3 +67,33 @@ class TestFirstPartyPythonFiles:
         charm = _charm(tmp_path, **{'src/charm.py': '', 'tests/unit/test_charm.py': ''})
         found = [p.relative_to(charm).as_posix() for p in first_party_python_files(charm)]
         assert found == ['src/charm.py']
+
+
+class TestUnreadInputsCapTheVerdict:
+    """An item cannot be settled by evidence it could not read."""
+
+    def _check(self, verdict: Verdict, unread: list[str]) -> ItemCheck:
+        return ItemCheck(
+            checklist_id='example',
+            gather=lambda source: Evidence(lines=['looked'], unread=unread),
+            decide=lambda evidence: ItemAssessment(
+                checklist_id='example',
+                verdict=verdict,
+                rationale='The charm is fine.',
+                evidence=evidence.lines,
+            ),
+        )
+
+    @pytest.mark.parametrize('verdict', [Verdict.PASS, Verdict.FAIL, Verdict.NOT_APPLICABLE])
+    def test_a_settled_verdict_is_capped(self, tmp_path: pathlib.Path, verdict: Verdict):
+        check = self._check(verdict, ['src/other.py: could not be parsed'])
+        assessment = check.assess(CharmSource(charm_path=tmp_path))
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'could not be read' in assessment.rationale
+        assert 'src/other.py: could not be parsed' in assessment.evidence
+
+    def test_nothing_unread_is_left_alone(self, tmp_path: pathlib.Path):
+        check = self._check(Verdict.PASS, [])
+        assessment = check.assess(CharmSource(charm_path=tmp_path))
+        assert assessment.verdict is Verdict.PASS
+        assert assessment.rationale == 'The charm is fine.'

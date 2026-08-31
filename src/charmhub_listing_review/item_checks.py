@@ -54,7 +54,7 @@ from typing import Any
 
 import yaml
 
-from ._models import ItemAssessment
+from ._models import ItemAssessment, Verdict
 
 # Vendored charm libraries live here. They are third-party code that the charm
 # author did not write and cannot change, so findings in them are not the
@@ -159,6 +159,15 @@ class Evidence:
     data: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Structured evidence for ``decide`` to rule on."""
 
+    unread: list[str] = dataclasses.field(default_factory=list)
+    """Inputs this item needed and could not read, one line each.
+
+    A file that would not parse is exactly where the answer might have been,
+    so an item with anything here cannot be settled either way - see
+    :meth:`ItemCheck.assess`, which enforces that so no ``decide`` has to
+    remember to.
+    """
+
 
 @dataclasses.dataclass
 class ItemCheck:
@@ -174,5 +183,26 @@ class ItemCheck:
     """Rule on gathered evidence, deferring what it cannot settle."""
 
     def assess(self, source: CharmSource) -> ItemAssessment:
-        """Gather evidence for this item and rule on it."""
-        return self.decide(self.gather(source))
+        """Gather evidence for this item and rule on it.
+
+        An item whose evidence names something it could not read is capped at
+        ``NEEDS_HUMAN`` whatever ``decide`` concluded. A charm is not shown to
+        be clean by a file that would not parse, and it is not shown to be
+        broken by one either: the input that would have answered the question
+        is the one that went missing. Enforcing it here rather than in each
+        ``decide`` is deliberate - every item has this failure mode, and the
+        ones that forget it are the ones that report a confident wrong answer.
+        """
+        evidence = self.gather(source)
+        assessment = self.decide(evidence)
+        if not evidence.unread or assessment.verdict is Verdict.NEEDS_HUMAN:
+            return assessment
+        return dataclasses.replace(
+            assessment,
+            verdict=Verdict.NEEDS_HUMAN,
+            rationale=(
+                f'{assessment.rationale.rstrip(".")}, but {len(evidence.unread)} input(s) '
+                f'could not be read, so this is not settled.'
+            ),
+            evidence=assessment.evidence + evidence.unread,
+        )
