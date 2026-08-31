@@ -583,7 +583,6 @@ def gather_release_workflows(source: CharmSource) -> Evidence:
         )
 
     lines = [f'{release.path}: {release.how}; runs on {release.triggers}' for release in releases]
-    lines.extend(f'{path}: could not be parsed as YAML' for path in unreadable)
     if not releases:
         lines.extend(f'{entry}, whose contents are in another repository' for entry in opaque)
     return Evidence(
@@ -592,8 +591,8 @@ def gather_release_workflows(source: CharmSource) -> Evidence:
             'releases': releases,
             'opaque': opaque,
             'workflow_count': len(workflows),
-            'unreadable': unreadable,
         },
+        unread=[f'{path}: could not be parsed as YAML' for path in unreadable],
     )
 
 
@@ -605,21 +604,7 @@ def decide_automated_releasing(evidence: Evidence) -> ItemAssessment:
 
     opaque: list[str] = evidence.data.get('opaque', [])
 
-    unreadable: list[str] = evidence.data.get('unreadable', [])
-
     if not releases:
-        if unreadable:
-            # The file that would have answered the question is the one that
-            # could not be read.
-            return ItemAssessment(
-                checklist_id=checklist_id,
-                verdict=Verdict.NEEDS_HUMAN,
-                rationale=(
-                    f'No workflow in this repository publishes the charm, but '
-                    f'{len(unreadable)} workflow(s) could not be read.'
-                ),
-                evidence=evidence.lines,
-            )
         if opaque:
             # Naming a reusable workflow is not reading it: this is undecidable
             # from the repository, not a decided absence.
@@ -889,12 +874,13 @@ def gather_integration_tests(source: CharmSource) -> Evidence:
     test_files = _integration_test_files(source.charm_path)
     covered: dict[str, str] = {}
     unattributed: list[str] = []
+    unread_tests: list[str] = []
     for path in test_files:
         relative = path.relative_to(source.charm_path).as_posix()
         try:
             tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
         except (SyntaxError, ValueError):
-            unattributed.append(f'{relative}: could not be parsed')
+            unread_tests.append(f'{relative}: could not be parsed')
             continue
         visitor = _IntegrateVisitor(relative, charm_name, set(endpoints))
         visitor.visit(tree)
@@ -917,14 +903,13 @@ def gather_integration_tests(source: CharmSource) -> Evidence:
     lines.extend(f'{endpoint} ({endpoints[endpoint]}): never integrated' for endpoint in uncovered)
     lines.extend(f'{name}: excluded, tracing' for name in excluded)
     lines.extend(unattributed)
-    lines.extend(f'{path}: could not be parsed as YAML' for path in unreadable)
     lines.extend(f'{entry}, whose contents are in another repository' for entry in opaque)
 
     return Evidence(
         lines=lines,
+        unread=([f'{path}: could not be parsed as YAML' for path in unreadable] + unread_tests),
         data={
             'running': running,
-            'unreadable': unreadable,
             'test_files': [str(path) for path in test_files],
             'endpoints': endpoints,
             'covered': covered,
@@ -979,18 +964,11 @@ def decide_integration_tests(evidence: Evidence) -> ItemAssessment:
     failures: list[str] = []
     deferred: list[str] = []
 
-    unreadable: list[str] = evidence.data.get('unreadable', [])
-
     automatic = [entry for entry in running if entry['default_branch_push']]
     if running and not automatic:
         failures.append(
             'they are not run on changes to the default branch '
             f'({running[0]["path"]} runs on {running[0]["triggers"]})'
-        )
-    elif not running and unreadable:
-        deferred.append(
-            f'no workflow in this repository runs them, but {len(unreadable)} workflow(s) '
-            f'could not be read'
         )
     elif not running and opaque:
         deferred.append(
