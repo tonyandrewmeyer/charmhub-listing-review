@@ -24,7 +24,6 @@ from charmhub_listing_review.item_checks import (
     CharmSource,
     Evidence,
     ItemCheck,
-    action_additional_properties,
     automated_releasing,
     avoid_charm_plugin,
     dependency_update_tooling,
@@ -820,42 +819,6 @@ class TestCharmSource:
         # Without the repository root, the workflows are invisible.
         charm_only = CharmSource(charm_path=tmp_path / 'charms' / 'my-charm')
         assert automated_releasing.assess(charm_only).verdict is Verdict.FAIL
-
-
-class TestActionAdditionalProperties:
-    def test_no_actions_is_not_applicable(self, tmp_path: pathlib.Path):
-        assessment = action_additional_properties.assess(
-            _source(tmp_path, **{'charmcraft.yaml': 'name: my-charm\n'})
-        )
-        assert assessment.verdict is Verdict.NOT_APPLICABLE
-
-    def test_missing_additional_properties_fails(self, tmp_path: pathlib.Path):
-        charmcraft = (
-            'name: my-charm\nactions:\n'
-            '  snapshot:\n    description: Take a snapshot.\n'
-            '  restore:\n    description: Restore a snapshot.\n    additionalProperties: false\n'
-        )
-        assessment = action_additional_properties.assess(
-            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
-        )
-        assert assessment.verdict is Verdict.FAIL
-        assert 'snapshot' in assessment.rationale
-        assert 'restore' not in assessment.rationale
-
-    def test_all_actions_declare_it_passes(self, tmp_path: pathlib.Path):
-        charmcraft = (
-            'name: my-charm\nactions:\n'
-            '  snapshot:\n    description: Take a snapshot.\n    additionalProperties: false\n'
-        )
-        assessment = action_additional_properties.assess(
-            _source(tmp_path, **{'charmcraft.yaml': charmcraft})
-        )
-        assert assessment.verdict is Verdict.PASS
-
-    def test_registered_under_its_checklist_id(self):
-        assert (
-            ITEM_CHECKS['charmcraft-actions-additional-properties'] is action_additional_properties
-        )
 
 
 class TestDependencyUpdateTooling:

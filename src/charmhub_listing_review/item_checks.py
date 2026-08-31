@@ -1194,82 +1194,6 @@ no_duplicate_model_config = ItemCheck(
 )
 
 
-# --- charmcraft-actions-additional-properties ----------------------------------
-
-# This item's evidence, unlike every other item in this module, is *not* one of
-# canonical/operator's best-practice admonitions - it is the `charmcraft.yaml`
-# file reference page, which lives in canonical/charmcraft's own documentation.
-# canonical/operator#2524 (the source of every other checklist_id here) only
-# adds `:name:` anchors to admonitions on operator's own howto pages, so this
-# bullet - like the `optional` key bullet `relations_includes_optional` already
-# covers - has no upstream anchor yet, from #2524 or anywhere else. The ID below
-# is this module's own placeholder, following the same `<key>-<slug>` shape the
-# charmcraft docs use for their internal ref targets (e.g.
-# `charmcraft-yaml-key-actions`), pending a charmcraft-side follow-up that adds
-# a real one.
-
-
-def gather_action_additional_properties(source: CharmSource) -> Evidence:
-    """Collect which of the charm's actions declare `additionalProperties`."""
-    charmcraft = source.charmcraft_yaml()
-    actions = charmcraft.get('actions')
-    if not isinstance(actions, dict):
-        actions = {}
-
-    missing: list[str] = []
-    present: list[str] = []
-    for name, definition in actions.items():
-        if isinstance(definition, dict) and 'additionalProperties' in definition:
-            present.append(str(name))
-        else:
-            missing.append(str(name))
-
-    lines = [f'{name}: missing `additionalProperties`' for name in sorted(missing)]
-    lines.extend(f'{name}: declares `additionalProperties`' for name in sorted(present))
-    return Evidence(
-        lines=lines,
-        data={'missing': missing, 'action_count': len(actions)},
-    )
-
-
-def decide_action_additional_properties(evidence: Evidence) -> ItemAssessment:
-    """Rule on whether every action declares `additionalProperties`."""
-    checklist_id = 'charmcraft-actions-additional-properties'
-    action_count: int = evidence.data.get('action_count', 0)
-    missing: list[str] = evidence.data.get('missing', [])
-
-    if not action_count:
-        return ItemAssessment(
-            checklist_id=checklist_id,
-            verdict=Verdict.NOT_APPLICABLE,
-            rationale='The charm declares no actions.',
-        )
-
-    if missing:
-        return ItemAssessment(
-            checklist_id=checklist_id,
-            verdict=Verdict.FAIL,
-            rationale=(
-                f'{len(missing)} of {action_count} action(s) do not declare '
-                f'`additionalProperties`: {", ".join(sorted(missing))}.'
-            ),
-            evidence=evidence.lines,
-        )
-
-    return ItemAssessment(
-        checklist_id=checklist_id,
-        verdict=Verdict.PASS,
-        rationale=f'All {action_count} action(s) declare `additionalProperties`.',
-    )
-
-
-action_additional_properties = ItemCheck(
-    checklist_id='charmcraft-actions-additional-properties',
-    gather=gather_action_additional_properties,
-    decide=decide_action_additional_properties,
-)
-
-
 # --- best-practice-automated-dependency-updates --------------------------------
 
 # https://docs.renovatebot.com/configuration-options/#locations-for-configuration-filenames
@@ -1471,7 +1395,6 @@ ITEM_CHECKS: dict[str, ItemCheck] = {
         automated_releasing,
         integration_tests,
         no_duplicate_model_config,
-        action_additional_properties,
         dependency_update_tooling,
         avoid_charm_plugin,
     )
