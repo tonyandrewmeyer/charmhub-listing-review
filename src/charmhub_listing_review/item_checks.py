@@ -12,17 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Per-item checks for checklist entries that ``evaluate.py`` leaves blank.
+"""The shape a checklist item's assessment takes, whatever decided it.
 
 ``evaluate.py`` holds the checks that decide an item from metadata: does a
 file exist, does a URL resolve, does a YAML key have the right shape. The
-items that remain unticked are the ones that need the charm's *source* read,
-and this module is where those live.
+items that remain unticked need more than that, and three things answer them:
+
+* **charmlint**, over the charm's YAML, under a listing-review configuration.
+* **ruff**, over the charm's Python, likewise.
+* **an AI pass**, for the items neither linter can decide - and for reading
+  what the author chose to suppress, since a ``# noqa`` is an answer of a
+  kind.
+
+This module does not implement any of those. It holds what they have in
+common: a per-item verdict with the evidence behind it, so a reviewer reads
+one kind of answer rather than three, and so the renderers do not care which
+layer produced a given tick.
 
 Each item is an :class:`ItemCheck` with two halves:
 
-* ``gather`` collects the evidence the item names, and nothing else. It is
-  deliberately separate so that the same evidence feeds both halves below,
+* ``gather`` collects the evidence the item names, and nothing else -
+  normally by running a linter and keeping the diagnostics for this item. It
+  is deliberately separate so that the same evidence feeds both halves below,
   and so that what an AI backend sees is reviewable without running one.
 * ``decide`` rules on that evidence deterministically, returning
   :attr:`~._models.Verdict.NEEDS_HUMAN` for the residue it cannot settle.
@@ -70,6 +81,11 @@ def first_party_python_files(
     ``lib/charms/<this charm>/``, which are the author's to answer for.
     ``charm_name`` is matched with both hyphens and underscores, since the
     directory uses the underscored form.
+
+    This answers "whose code is this?", not "what is wrong with it?" - the
+    lint layers exclude vendored code through their own configuration. It is
+    here for the AI pass, which is handed files to read and should not be
+    handed somebody else's library.
     """
     own_lib_dirs: set[str] = set()
     if charm_name:
@@ -100,7 +116,7 @@ class CharmSource:
     """
 
     charm_path: pathlib.Path
-    """The directory holding ``charmcraft.yaml``."""
+    """The directory holding ``charmcraft.yaml``, and where the linters run."""
 
     repo_path: pathlib.Path | None = None
     """The repository root. Defaults to the charm directory."""
@@ -146,7 +162,7 @@ class Evidence:
 
 @dataclasses.dataclass
 class ItemCheck:
-    """A checklist item that is decided by reading the charm's source."""
+    """A checklist item and the two halves that answer it."""
 
     checklist_id: str
     """The ``<!-- id: ... -->`` slug this check answers."""
