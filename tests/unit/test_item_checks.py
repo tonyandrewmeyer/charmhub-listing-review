@@ -444,6 +444,31 @@ jobs:
             )
             assert assessment.verdict is Verdict.PASS, name
 
+    def test_a_tool_install_channel_is_not_the_release_channel(self, tmp_path: pathlib.Path):
+        """`snap install charmcraft --channel latest/stable` is not a release."""
+        workflow = (
+            'name: Release\n'
+            'on:\n'
+            '  push:\n'
+            '    branches: [main]\n'
+            'jobs:\n'
+            '  release:\n'
+            '    steps:\n'
+            '      - run: sudo snap install charmcraft --classic --channel latest/stable\n'
+            '      - run: charmcraft upload --release ${{ inputs.channel }} my.charm\n'
+        )
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': workflow})
+        )
+        assert assessment.verdict is Verdict.PASS
+
+    def test_an_unreadable_workflow_is_not_an_absent_one(self, tmp_path: pathlib.Path):
+        assessment = automated_releasing.assess(
+            _source(tmp_path, **{'.github/workflows/release.yaml': 'name: [\n'})
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'could not be read' in assessment.rationale
+
     def test_registered_under_its_checklist_id(self):
         assert ITEM_CHECKS['ci-automated-releasing'] is automated_releasing
 
@@ -471,9 +496,8 @@ class TestIntegrationTests:
 
     def test_uncovered_endpoints_are_listed(self, tmp_path: pathlib.Path):
         test = (
-            'APP = "my-charm"\n'
             'def test_deploy(juju):\n'
-            '    juju.integrate(f"{APP}:database", "postgresql-k8s:database")\n'
+            '    juju.integrate("my-charm:database", "postgresql-k8s:database")\n'
         )
         assessment = integration_tests.assess(
             _source(
@@ -655,6 +679,84 @@ jobs:
 
     def test_registered_under_its_checklist_id(self):
         assert ITEM_CHECKS['ci-integration-tests'] is integration_tests
+
+    def test_an_interpolated_application_defers_rather_than_credits(self, tmp_path: pathlib.Path):
+        """`database` is an endpoint name both sides of an integration have."""
+        test = (
+            'OTHER = "postgresql-k8s"\n'
+            'def test_deploy(juju):\n'
+            '    juju.integrate(f"{OTHER}:database", "other:db")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'not seen integrated' in assessment.rationale
+        assert any('application name is interpolated' in line for line in assessment.evidence)
+
+    def test_a_suite_in_one_file_is_still_a_suite(self, tmp_path: pathlib.Path):
+        """A small charm keeps the whole suite in tests/test_integration.py."""
+        test = (
+            'def test_deploy(juju):\n'
+            '    juju.integrate("my-charm:database", "postgresql-k8s:database")\n'
+            '    juju.integrate("my-charm:logging", "loki-k8s:logging")\n'
+            '    juju.integrate("my-charm:metrics-endpoint", "prometheus-k8s:metrics")\n'
+            '    juju.integrate("my-charm:ingress", "traefik-k8s:ingress")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/test_integration.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is not Verdict.FAIL
+
+    def test_a_suite_the_walk_cannot_see_is_not_an_absent_suite(self, tmp_path: pathlib.Path):
+        """A workflow running a suite is evidence it exists, whatever the layout."""
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': _INTEGRATION_ON_PUSH,
+                    'tests/spread/task.yaml': 'summary: integration\n',
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'somewhere this check does not look' in assessment.rationale
+
+    def test_an_unreadable_workflow_defers_the_trigger_clause(self, tmp_path: pathlib.Path):
+        test = (
+            'def test_deploy(juju):\n'
+            '    juju.integrate("my-charm:database", "postgresql-k8s:database")\n'
+            '    juju.integrate("my-charm:logging", "loki-k8s:logging")\n'
+            '    juju.integrate("my-charm:metrics-endpoint", "prometheus-k8s:metrics")\n'
+            '    juju.integrate("my-charm:ingress", "traefik-k8s:ingress")\n'
+        )
+        assessment = integration_tests.assess(
+            _source(
+                tmp_path,
+                **{
+                    'charmcraft.yaml': _CHARMCRAFT_WITH_ENDPOINTS,
+                    '.github/workflows/ci.yaml': 'name: [\n',
+                    'tests/integration/test_charm.py': test,
+                },
+            )
+        )
+        assert assessment.verdict is Verdict.NEEDS_HUMAN
+        assert 'could not be read' in assessment.rationale
 
 
 class TestCharmSource:

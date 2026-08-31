@@ -505,18 +505,38 @@ class _ReleaseWorkflow:
     caveats: list[str] = dataclasses.field(default_factory=list)
 
 
-def _literal_channels(workflow: _workflows.Workflow) -> list[str]:
-    """Channel names visible in the workflow, ignoring ``${{ }}`` expressions."""
-    text = yaml.safe_dump(workflow.jobs, default_flow_style=False)
+_CHANNEL_PATTERN = re.compile(r'(?:channel:|--channel[= ]|--release[= ])\s*([A-Za-z0-9._/-]+)')
+
+
+def _literal_channels(text: str) -> list[str]:
+    """Channel names in *text*, ignoring ``${{ }}`` expressions.
+
+    This is only ever given the publishing step's own command, or the ``with:``
+    block of the job that calls a publishing action. Scanning the whole
+    workflow instead reads a tool install as a release: ``snap install
+    charmcraft --channel latest/stable`` is the first line of most release
+    workflows, and taking `stable` from it defers the item on a charm that
+    releases wherever its `${{ }}` expression points.
+    """
     found: list[str] = []
-    pattern = r'(?:channel:|--channel[= ]|--release[= ])\s*([A-Za-z0-9._/-]+)'
-    for match in re.finditer(pattern, text):
+    for match in _CHANNEL_PATTERN.finditer(text):
         value = match.group(1)
         if '${{' in value or not value:
             continue
         # A channel is `track/risk` or just `risk`.
         found.append(value.split('/')[-1])
     return sorted(set(found))
+
+
+def _job_inputs(workflow: _workflows.Workflow, job_id: str) -> str:
+    """The ``with:`` block of one job, as text to read channel names from."""
+    job = workflow.jobs.get(job_id)
+    if not isinstance(job, dict):
+        return ''
+    inputs = job.get('with')
+    if not isinstance(inputs, dict):
+        return ''
+    return yaml.safe_dump(inputs, default_flow_style=False)
 
 
 def gather_release_workflows(source: CharmSource) -> Evidence:
@@ -529,15 +549,20 @@ def gather_release_workflows(source: CharmSource) -> Evidence:
     unreadable = [w.path for w in workflows if w.unreadable]
     for workflow in workflows:
         how = ''
+        # What to read channel names out of: the publishing command itself, or
+        # the inputs of the job that calls a publishing action.
+        channel_source = ''
         for location, command in _workflows.step_commands(workflow):
             if _workflows.matches_any(command, _RELEASE_COMMANDS):
                 how = f'{location} runs `{command}`'
+                channel_source = command
                 break
         unrecognised: list[str] = []
         if not how:
             for job_id, uses in _workflows.iter_external_uses(workflow):
                 if _workflows.matches_any(uses, _RELEASE_ACTIONS):
                     how = f'{workflow.path} ({job_id}) uses {uses.split("@")[0]}'
+                    channel_source = _job_inputs(workflow, job_id)
                     break
                 unrecognised.append(f'{workflow.path} ({job_id}) calls {uses.split("@")[0]}')
         if not how:
@@ -552,7 +577,7 @@ def gather_release_workflows(source: CharmSource) -> Evidence:
                 triggers=_workflows.describe_triggers(summary),
                 default_branch_push=summary.default_branch_push,
                 how=how,
-                channels=_literal_channels(workflow),
+                channels=_literal_channels(channel_source),
                 caveats=list(summary.caveats),
             )
         )
@@ -580,7 +605,21 @@ def decide_automated_releasing(evidence: Evidence) -> ItemAssessment:
 
     opaque: list[str] = evidence.data.get('opaque', [])
 
+    unreadable: list[str] = evidence.data.get('unreadable', [])
+
     if not releases:
+        if unreadable:
+            # The file that would have answered the question is the one that
+            # could not be read.
+            return ItemAssessment(
+                checklist_id=checklist_id,
+                verdict=Verdict.NEEDS_HUMAN,
+                rationale=(
+                    f'No workflow in this repository publishes the charm, but '
+                    f'{len(unreadable)} workflow(s) could not be read.'
+                ),
+                evidence=evidence.lines,
+            )
         if opaque:
             # Naming a reusable workflow is not reading it: this is undecidable
             # from the repository, not a decided absence.
@@ -705,12 +744,26 @@ def _declared_endpoints(charmcraft: dict[str, Any]) -> tuple[dict[str, str], lis
     return endpoints, excluded
 
 
+def _is_integration_test(relative: pathlib.PurePath) -> bool:
+    """Is this file part of an integration suite?
+
+    A directory called ``integration`` is the common layout, but it is not the
+    only one: a small charm keeps the whole suite in ``tests/test_integration.py``,
+    and a spread suite lives under ``tests/spread``. Recognising only the
+    directory reports those charms as having no integration tests at all.
+    """
+    parts = relative.parts
+    if 'integration' in parts or 'spread' in parts:
+        return True
+    return 'integration' in relative.name
+
+
 def _integration_test_files(charm_path: pathlib.Path) -> list[pathlib.Path]:
-    """Python files under a directory named ``integration``."""
+    """The Python files that make up the charm's integration suite."""
     return sorted(
         path
         for path in charm_path.rglob('*.py')
-        if 'integration' in path.relative_to(charm_path).parts
+        if _is_integration_test(path.relative_to(charm_path))
     )
 
 
@@ -732,21 +785,23 @@ def _literal_text(node: ast.AST) -> str | None:
 def _names_this_charm(application: str, charm_name: str) -> bool:
     """Is ``application`` the charm under test, on the left of an endpoint?
 
-    Three spellings all mean the charm under test, and all three are common:
+    Two spellings both mean the charm under test, and both are common:
 
-    * interpolated - the suite holds its name in a variable (``APP_NAME``) and
-      hard-codes the applications it integrates with;
     * the charm's own name;
     * the charm's name without its packaging suffix - ``grafana-k8s`` is
       deployed as ``grafana``, and its tests write ``'grafana:logging'``.
 
     Requiring an exact match instead reports a charm with a thorough suite as
-    covering almost none of its endpoints. This is only ever consulted for an
-    endpoint the charm itself declares, which bounds how wrong the last case
-    can be.
+    covering almost none of its endpoints.
+
+    An interpolated application (``f'{APP}:database'``) is *not* treated as a
+    match. It usually is the charm under test, but ``database``, ``ingress``,
+    ``logging`` and ``certificates`` are exactly the endpoint names both
+    applications in a test have, so reading it as a match credits this charm
+    for integrating somebody else's endpoint. The caller records those calls
+    as unattributed instead, which defers the coverage clause rather than
+    settling it wrongly in either direction.
     """
-    if _PLACEHOLDER in application:
-        return True
 
     def stem(name: str) -> str:
         name = name.strip().lower()
@@ -793,6 +848,9 @@ class _IntegrateVisitor(ast.NodeVisitor):
             return
         if endpoint not in self._endpoints:
             return
+        if _PLACEHOLDER in application:
+            self.unattributed.append(f'{location}: the application name is interpolated')
+            return
         if not _names_this_charm(application, self._charm_name):
             return
         self.covered.setdefault(endpoint, location)
@@ -806,6 +864,7 @@ def gather_integration_tests(source: CharmSource) -> Evidence:
 
     workflows = _workflows.load_workflows(source.repo)
     summaries = _workflows.resolve_triggers(workflows, source.default_branch)
+    unreadable = [workflow.path for workflow in workflows if workflow.unreadable]
     running: list[dict[str, Any]] = []
     opaque: list[str] = []
     for workflow in workflows:
@@ -858,12 +917,14 @@ def gather_integration_tests(source: CharmSource) -> Evidence:
     lines.extend(f'{endpoint} ({endpoints[endpoint]}): never integrated' for endpoint in uncovered)
     lines.extend(f'{name}: excluded, tracing' for name in excluded)
     lines.extend(unattributed)
+    lines.extend(f'{path}: could not be parsed as YAML' for path in unreadable)
     lines.extend(f'{entry}, whose contents are in another repository' for entry in opaque)
 
     return Evidence(
         lines=lines,
         data={
             'running': running,
+            'unreadable': unreadable,
             'test_files': [str(path) for path in test_files],
             'endpoints': endpoints,
             'covered': covered,
@@ -893,7 +954,21 @@ def decide_integration_tests(evidence: Evidence) -> ItemAssessment:
 
     if not test_files:
         # Without a suite there is nothing for the other two clauses to be
-        # about, so this one short-circuits where the others do not.
+        # about, so this one short-circuits where the others do not - but a
+        # workflow running an integration command is evidence that a suite
+        # exists in a layout the file walk does not recognise, and the two
+        # halves disagreeing is not grounds for saying there is nothing there.
+        if running:
+            return ItemAssessment(
+                checklist_id=checklist_id,
+                verdict=Verdict.NEEDS_HUMAN,
+                rationale=(
+                    f'{running[0]["path"]} runs an integration suite, but no integration '
+                    f'tests were found in this charm, so the suite is somewhere this check '
+                    f'does not look.'
+                ),
+                evidence=evidence.lines,
+            )
         return ItemAssessment(
             checklist_id=checklist_id,
             verdict=Verdict.FAIL,
@@ -904,11 +979,18 @@ def decide_integration_tests(evidence: Evidence) -> ItemAssessment:
     failures: list[str] = []
     deferred: list[str] = []
 
+    unreadable: list[str] = evidence.data.get('unreadable', [])
+
     automatic = [entry for entry in running if entry['default_branch_push']]
     if running and not automatic:
         failures.append(
             'they are not run on changes to the default branch '
             f'({running[0]["path"]} runs on {running[0]["triggers"]})'
+        )
+    elif not running and unreadable:
+        deferred.append(
+            f'no workflow in this repository runs them, but {len(unreadable)} workflow(s) '
+            f'could not be read'
         )
     elif not running and opaque:
         deferred.append(
