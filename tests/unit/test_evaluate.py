@@ -14,12 +14,14 @@
 
 """Test the automated criteria evaluation."""
 
+import pathlib
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
 from unittest import mock
 
 import pytest
 
 import charmhub_listing_review.evaluate as evaluate
+import charmhub_listing_review.self_review as self_review
 import charmhub_listing_review.update_issue as update_issue
 from charmhub_listing_review.sphinx_refs import convert_sphinx_refs
 
@@ -747,3 +749,28 @@ def test_every_checklist_id_has_a_matching_comment_marker(tmp_path):
         if result.checklist_id and f'<!-- id: {result.checklist_id} -->' not in comment
     })
     assert not ids_with_no_marker
+
+    # self-review does not use that comment as-is: it keeps the part from
+    # '### Documentation' onwards and splices a hand-written block in front,
+    # so its markers are maintained separately and can drift on their own.
+    # `charm-name` had already gone missing from it.
+    fixed_checks = _self_review_fixed_checks()
+    retained = comment.split('### Documentation', 1)[1].split('</details>', 1)[0]
+    self_review_comment = fixed_checks + retained
+    ids_missing_from_self_review = sorted({
+        result.checklist_id
+        for result in evaluation.checks
+        if result.checklist_id and f'<!-- id: {result.checklist_id} -->' not in self_review_comment
+    })
+    assert not ids_missing_from_self_review
+
+
+def _self_review_fixed_checks() -> str:
+    """Return the hand-written checklist block self_review splices in.
+
+    It is a literal inside `print_self_review_results`, so there is nothing to
+    import; read it back out of the source rather than duplicating it here and
+    letting the copy rot.
+    """
+    source = pathlib.Path(self_review.__file__).read_text()
+    return source.split('fixed_checks = ', 1)[1].split('.strip()  #', 1)[0]

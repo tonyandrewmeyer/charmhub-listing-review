@@ -89,6 +89,7 @@ def print_self_review_results(
     ### Basic Requirements
 * [ ] The charm does what it is meant to do, demonstrated in a demo or by following a tutorial. <!-- id: charm-demo -->
 * [ ] The charm's page on Charmhub provides a quality impression. The overall appearance looks good and the documentation looks reasonable. <!-- id: charmhub-quality-impression -->
+* [ ] The charm's name follows the pattern `<workload name>[-<function>][-k8s]` and contains only ASCII lowercase letters, numbers, and hyphens. It doesn't include `operator` or `charm` as a prefix or suffix, or an organisation or publisher name. <!-- id: charm-name -->
 * [ ] The charm has an icon (recommended). <!-- id: charm-has-icon -->
 * [ ] Automated releasing to unstable channels exists <!-- id: ci-automated-releasing -->
 * [ ] Integration tests exist, are run on every change to the default branch, and are passing. At minimum, the tests verify that the charm can be deployed and ends up in a success state, and that the charm can be integrated with at least one example for each 'provides' and 'requires' specified (including optional, excluding tracing) ending up in a success state. The tests should be run with `charmcraft test`. <!-- id: ci-integration-tests -->
