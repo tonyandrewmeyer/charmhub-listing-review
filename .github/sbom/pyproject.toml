@@ -1,0 +1,17 @@
+# Kept as a separate project (not a dependency group of
+# charmhub-listing-review) because the publish workflow runs
+# `cyclonedx-py environment .venv` to describe the package's runtime closure.
+# cyclonedx-py has to be installed somewhere to run, and it must not live in
+# the venv it measures — otherwise it and its transitive tree would show up in
+# the SBOM. A separate project gives it its own venv without contorting
+# `uv sync` flags on the main project.
+[project]
+name = "charmhub-listing-review-sbom"
+version = "0"
+requires-python = ">=3.11"
+dependencies = ["cyclonedx-bom>=6"]
+description = "Isolated lockfile for cyclonedx-py used by the publish workflow."
+
+[tool.uv]
+# Same window as the main project.
+exclude-newer = "7 days"
